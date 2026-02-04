@@ -16,6 +16,7 @@ import mercadopago
 import logging
 import re
 import json
+import math
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -1947,8 +1948,11 @@ def show_payment_pending():
             st.rerun()
 
 # --- 16. FUNCIONES DE BRACKETS ---
-def generate_brackets_for_category(category):
-    """Genera brackets para una categoría específica"""
+
+
+
+def generate_dynamic_brackets_for_category(category):
+    """Genera brackets dinámicos según la cantidad de participantes"""
     try:
         brackets_df = load_brackets()
         inscriptions_df = load_inscriptions()
@@ -1962,42 +1966,66 @@ def generate_brackets_for_category(category):
             (inscriptions_df['Estado_Pago'] == 'Confirmado')
         ]
         
-        if len(category_inscriptions) < 2:
+        participants = category_inscriptions.to_dict('records')
+        num_participants = len(participants)
+        
+        if num_participants < 2:
             st.warning(f"No hay suficientes inscritos confirmados en {category} (mínimo 2)")
             return False
         
-        participants = category_inscriptions.to_dict('records')
         random.shuffle(participants)
         
-        # Limpiar brackets existentes para esta categoría
-        brackets_df.loc[brackets_df['Category'] == category, ['P1_Name', 'P1_ID', 'P1_Dojo', 'P1_Votes',
-                                                              'P2_Name', 'P2_ID', 'P2_Dojo', 'P2_Votes',
-                                                              'Winner', 'Winner_ID', 'Status']] = ""
+        # CALCULAR ESTRUCTURA DEL BRACKET
+        bracket_structure = calculate_bracket_structure(num_participants)
         
-        # Asignar participantes a cuartos de final
-        for i in range(1, 5):
-            match_id = f"Q{i}"
-            mask = (brackets_df['Category'] == category) & (brackets_df['Match_ID'] == match_id)
+        # Limpiar brackets existentes para esta categoría
+        brackets_df = brackets_df[brackets_df['Category'] != category]
+        
+        all_brackets = []
+        
+        # Generar todas las rondas
+        for round_num, round_info in enumerate(bracket_structure['rounds']):
+            round_name = round_info['name']
+            num_matches = round_info['matches']
+            next_round_matches = bracket_structure['rounds'][round_num + 1]['matches'] if round_num + 1 < len(bracket_structure['rounds']) else 1
             
-            if (i-1)*2 < len(participants):
-                p1 = participants[(i-1)*2]
-                p2 = participants[(i-1)*2 + 1] if (i-1)*2 + 1 < len(participants) else None
+            for match_num in range(1, num_matches + 1):
+                match_id = f"{round_info['prefix']}{match_num}"
                 
-                brackets_df.loc[mask, 'P1_Name'] = p1['Nombre_Completo']
-                brackets_df.loc[mask, 'P1_ID'] = p1['ID']
-                brackets_df.loc[mask, 'P1_Dojo'] = p1['Dojo']
-                brackets_df.loc[mask, 'P1_Votes'] = 0
-                brackets_df.loc[mask, 'Status'] = 'Scheduled'
+                bracket_entry = {
+                    "Category": category,
+                    "Match_ID": match_id,
+                    "Round": round_name,
+                    "Match_Number": match_num,
+                    "P1_Name": "", "P1_ID": "", "P1_Dojo": "", "P1_Votes": 0,
+                    "P2_Name": "", "P2_ID": "", "P2_Dojo": "", "P2_Votes": 0,
+                    "Winner": "", "Winner_ID": "", "Live": False, "Status": "Pending",
+                    "Total_Votes": 0, "Vote_History": "[]", "Last_Vote_Time": "",
+                    "Next_Match": f"{bracket_structure['rounds'][round_num + 1]['prefix']}{((match_num + 1) // 2)}" if round_num + 1 < len(bracket_structure['rounds']) else "",
+                    "Next_Position": "top" if match_num % 2 == 1 else "bottom" if round_num + 1 < len(bracket_structure['rounds']) else ""
+                }
                 
-                if p2:
-                    brackets_df.loc[mask, 'P2_Name'] = p2['Nombre_Completo']
-                    brackets_df.loc[mask, 'P2_ID'] = p2['ID']
-                    brackets_df.loc[mask, 'P2_Dojo'] = p2['Dojo']
-                    brackets_df.loc[mask, 'P2_Votes'] = 0
-                else:
-                    brackets_df.loc[mask, 'Winner'] = p1['Nombre_Completo']
-                    brackets_df.loc[mask, 'Winner_ID'] = p1['ID']
-                    brackets_df.loc[mask, 'Status'] = 'Walkover'
+                all_brackets.append(bracket_entry)
+        
+        # Agregar entrada para el campeón
+        all_brackets.append({
+            "Category": category,
+            "Match_ID": "CHAMPION",
+            "Round": "Champion",
+            "Match_Number": 1,
+            "P1_Name": "", "P1_ID": "", "P1_Dojo": "", "P1_Votes": 0,
+            "P2_Name": "", "P2_ID": "", "P2_Dojo": "", "P2_Votes": 0,
+            "Winner": "", "Winner_ID": "", "Live": False, "Status": "Pending",
+            "Total_Votes": 0, "Vote_History": "[]", "Last_Vote_Time": "",
+            "Next_Match": "", "Next_Position": ""
+        })
+        
+        # Convertir a DataFrame
+        new_brackets_df = pd.DataFrame(all_brackets)
+        brackets_df = pd.concat([brackets_df, new_brackets_df], ignore_index=True)
+        
+        # Asignar participantes a la primera ronda
+        assign_participants_to_first_round(brackets_df, category, participants)
         
         save_brackets(brackets_df)
         
@@ -2007,34 +2035,219 @@ def generate_brackets_for_category(category):
         
         save_inscriptions(inscriptions_df)
         
-        log_event("BRACKETS_GENERATED", f"Categoría: {category}, Participantes: {len(participants)}")
+        log_event("DYNAMIC_BRACKETS_GENERATED", 
+                 f"Categoría: {category}, Participantes: {num_participants}, "
+                 f"Rondas: {len(bracket_structure['rounds'])}, "
+                 f"Byes: {bracket_structure['byes']}")
+        
         return True
+        
     except Exception as e:
-        st.error(f"Error generando brackets: {str(e)}")
-        log_event("ERROR_GENERATE_BRACKETS", str(e))
+        st.error(f"Error generando brackets dinámicos: {str(e)}")
+        log_event("ERROR_GENERATE_DYNAMIC_BRACKETS", str(e))
         return False
 
+
+
+
+
+
+def calculate_bracket_structure(num_participants):
+    """Calcula la estructura del bracket según el número de participantes"""
+    
+    # Encontrar la potencia de 2 más cercana (hacia arriba)
+    next_power_of_two = 1
+    while next_power_of_two < num_participants:
+        next_power_of_two *= 2
+    
+    # Calcular byes (participantes que pasan directo a segunda ronda)
+    byes = next_power_of_two - num_participants
+    
+    # Calcular número de rondas
+    num_rounds = int(math.log2(next_power_of_two))
+    
+    rounds = []
+    match_prefixes = ["R64", "R32", "R16", "QF", "SF", "F"]  # Round of 64, 32, 16, Quarter, Semi, Final
+    
+    # Determinar en qué ronda comienza
+    start_round = 0
+    current_matches = next_power_of_two // 2
+    
+    while current_matches > num_participants - byes:
+        start_round += 1
+        current_matches //= 2
+    
+    # Crear estructura de rondas
+    match_count = next_power_of_two // 2
+    for i in range(num_rounds):
+        if i >= start_round:
+            if i - start_round < len(match_prefixes):
+                prefix = match_prefixes[i - start_round]
+            else:
+                prefix = f"R{i+1}"
+            
+            round_name = get_round_name(i - start_round, match_count)
+            rounds.append({
+                "name": round_name,
+                "matches": match_count,
+                "prefix": prefix,
+                "round_num": i - start_round
+            })
+        
+        match_count //= 2
+        if match_count < 1:
+            match_count = 1
+    
+    return {
+        "participants": num_participants,
+        "total_slots": next_power_of_two,
+        "byes": byes,
+        "rounds": rounds,
+        "total_rounds": len(rounds)
+    }
+
+def get_round_name(round_num, match_count):
+    """Devuelve el nombre de la ronda según el número"""
+    round_names = {
+        0: "First Round",
+        1: "Second Round",
+        2: "Round of 16",
+        3: "Quarterfinals",
+        4: "Semifinals",
+        5: "Finals"
+    }
+    
+    if round_num in round_names:
+        return round_names[round_num]
+    elif match_count == 4:
+        return "Quarterfinals"
+    elif match_count == 2:
+        return "Semifinals"
+    elif match_count == 1:
+        return "Finals"
+    else:
+        return f"Round {round_num + 1}"
+
+def assign_participants_to_first_round(brackets_df, category, participants):
+    """Asigna participantes a la primera ronda del bracket"""
+    
+    # Obtener la primera ronda
+    category_brackets = brackets_df[brackets_df['Category'] == category]
+    first_round = category_brackets[category_brackets['Round'] == 'First Round']
+    
+    if first_round.empty:
+        # Si no hay "First Round", buscar la primera ronda disponible
+        round_order = ["First Round", "Second Round", "Round of 16", "Quarterfinals", "Semifinals", "Finals"]
+        for round_name in round_order:
+            first_round = category_brackets[category_brackets['Round'] == round_name]
+            if not first_round.empty:
+                break
+    
+    num_matches = len(first_round)
+    num_participants = len(participants)
+    
+    # Calcular byes
+    next_power_of_two = 1
+    while next_power_of_two < num_participants:
+        next_power_of_two *= 2
+    byes = next_power_of_two - num_participants
+    
+    # Asignar participantes
+    participant_index = 0
+    bye_count = 0
+    
+    for match_idx, (_, match_row) in enumerate(first_round.iterrows()):
+        match_id = match_row['Match_ID']
+        
+        # Determinar si este match tiene bye
+        has_bye = bye_count < byes
+        
+        if has_bye:
+            # Bye: un participante pasa directo
+            if participant_index < num_participants:
+                p1 = participants[participant_index]
+                
+                brackets_df.loc[(brackets_df['Category'] == category) & 
+                               (brackets_df['Match_ID'] == match_id),
+                               ['P1_Name', 'P1_ID', 'P1_Dojo', 'Winner', 'Winner_ID', 'Status']] = [
+                    p1['Nombre_Completo'], p1['ID'], p1['Dojo'],
+                    p1['Nombre_Completo'], p1['ID'], 'Walkover'
+                ]
+                
+                participant_index += 1
+                bye_count += 1
+        else:
+            # Match normal: dos participantes
+            if participant_index + 1 < num_participants:
+                p1 = participants[participant_index]
+                p2 = participants[participant_index + 1]
+                
+                brackets_df.loc[(brackets_df['Category'] == category) & 
+                               (brackets_df['Match_ID'] == match_id),
+                               ['P1_Name', 'P1_ID', 'P1_Dojo', 
+                                'P2_Name', 'P2_ID', 'P2_Dojo', 'Status']] = [
+                    p1['Nombre_Completo'], p1['ID'], p1['Dojo'],
+                    p2['Nombre_Completo'], p2['ID'], p2['Dojo'], 'Scheduled'
+                ]
+                
+                participant_index += 2
+            elif participant_index < num_participants:
+                # Último participante sin pareja (bye automático)
+                p1 = participants[participant_index]
+                
+                brackets_df.loc[(brackets_df['Category'] == category) & 
+                               (brackets_df['Match_ID'] == match_id),
+                               ['P1_Name', 'P1_ID', 'P1_Dojo', 'Winner', 'Winner_ID', 'Status']] = [
+                    p1['Nombre_Completo'], p1['ID'], p1['Dojo'],
+                    p1['Nombre_Completo'], p1['ID'], 'Walkover'
+                ]
+                
+                participant_index += 1
+    
+    return brackets_df
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def close_registration_and_generate_brackets():
-    """Cierra las inscripciones y genera todos los brackets"""
+    """Cierra las inscripciones y genera brackets dinámicos"""
     try:
         if not set_registration_status(False):
             return False
         
         brackets_created = 0
         for category in ALL_CATEGORIES:
-            if generate_brackets_for_category(category):
+            if generate_dynamic_brackets_for_category(category):
                 brackets_created += 1
         
         if brackets_created > 0:
             set_tournament_stage('competition')
             create_backup("pre_competition")
-            log_event("REGISTRATION_CLOSED", f"Brackets generados: {brackets_created}")
+            
+            st.success(f"✅ Se generaron brackets dinámicos para {brackets_created} categorías!")
+            log_event("REGISTRATION_CLOSED_DYNAMIC", 
+                     f"Brackets generados: {brackets_created}, "
+                     f"Etapa: competencia")
             return True
         return False
     except Exception as e:
         st.error(f"Error cerrando inscripciones: {str(e)}")
-        log_event("ERROR_CLOSE_REGISTRATION", str(e))
+        log_event("ERROR_CLOSE_REGISTRATION_DYNAMIC", str(e))
         return False
+
+
+
+
 
 # --- 17. VISTA DE BRACKETS PROFESIONALES ---
 
@@ -2046,72 +2259,331 @@ def close_registration_and_generate_brackets():
 
 
 # Versión de prueba mínima
-def render_bracket_view():
+def render_dynamic_bracket_view():
+    """Renderiza brackets dinámicos según la cantidad de participantes"""
     cat = st.session_state.cat
     st.markdown(f"### 🏆 COMPETENCIA: {cat}")
     
-    # HTML de prueba simple
-    test_html = """
-    <div style="background: #1f2937; padding: 20px; border-radius: 10px; border: 2px solid #FDB931;">
-        <h3 style="color: #FDB931; text-align: center;">BRACKET DE PRUEBA</h3>
-        <div style="color: white; text-align: center;">
-            <p>Si ves esto en colores, el HTML funciona</p>
-            <p style="color: #10B981;">✓ Verde si funciona</p>
-        </div>
-    </div>
-    """
+    brackets_df = load_brackets()
+    if brackets_df.empty:
+        st.info("Los brackets se están generando. Por favor espera.")
+        return
+
+    cat_df = brackets_df[brackets_df['Category'] == cat]
     
-    st.markdown(test_html, unsafe_allow_html=True)
+    if cat_df.empty:
+        st.warning(f"No hay brackets generados para {cat} aún.")
+        return
     
+    # Obtener estructura del bracket
+    structure = analyze_bracket_structure(cat_df)
+    
+    # Mostrar información del bracket
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Participantes", structure['participants'])
+    with col2:
+        st.metric("Rondas", structure['total_rounds'])
+    with col3:
+        st.metric("Partidos", len(cat_df[cat_df['Round'] != 'Champion']))
+    with col4:
+        st.metric("Byes", structure['byes'])
+    
+    # Renderizar el bracket
+    render_bracket_visualization(cat_df, structure)
+    
+    # Sistema de votación
+    render_voting_system(cat_df)
+    
+    st.markdown("---")
+    if st.button("🏠 VOLVER AL INICIO", use_container_width=True):
+        st.session_state.view = "HOME"
+        st.rerun()
+
+
+
     # Si esto funciona, el problema está en tu HTML generado
 
 
 
 
-# --- 18. VISTA HOME PRINCIPAL ---
-def render_home_view():
-    """Vista principal del sistema"""
-    render_header()
+
+def analyze_bracket_structure(cat_df):
+    """Analiza la estructura del bracket"""
+    participants = set()
+    rounds = []
     
-    # Mostrar estado del torneo
-    tournament_stage = get_tournament_stage()
-    registration_open = is_registration_open()
-    
-    if tournament_stage == "inscription":
-        st.markdown('<div class="alert-success">🎯 <strong>ETAPA DE INSCRIPCIÓN ABIERTA</strong> - Puedes inscribirte en las categorías disponibles</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="alert-info">🏆 <strong>ETAPA DE COMPETICIÓN</strong> - Los brackets están activos y puedes votar</div>', unsafe_allow_html=True)
-    
-    # Estadísticas rápidas
-    inscriptions_df = load_inscriptions()
-    if not inscriptions_df.empty:
-        total_inscritos = len(inscriptions_df)
-        confirmados = len(inscriptions_df[inscriptions_df['Estado_Pago'] == 'Confirmado']) if 'Estado_Pago' in inscriptions_df.columns else 0
-        pendientes = total_inscritos - confirmados
+    for _, match in cat_df.iterrows():
+        if match['P1_ID'] and match['P1_ID'] != 'nan':
+            participants.add(match['P1_ID'])
+        if match['P2_ID'] and match['P2_ID'] != 'nan':
+            participants.add(match['P2_ID'])
         
-        st.markdown("#### 📊 ESTADÍSTICAS DEL TORNEO")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Inscritos", total_inscritos)
-        with col2:
-            st.metric("Confirmados", confirmados)
-        with col3:
-            st.metric("Pendientes", pendientes)
+        if match['Round'] not in rounds and match['Round'] != 'Champion':
+            rounds.append(match['Round'])
     
-    # Navegación principal
-    tab1, tab2, tab3, tab4 = st.tabs(["🏆 CATEGORÍAS", "📝 INSCRIBIRSE", "👥 INSCRITOS", "⚙️ ADMIN"])
+    # Ordenar rondas por progresión
+    round_order = ["First Round", "Second Round", "Round of 16", "Quarterfinals", "Semifinals", "Finals"]
+    rounds_sorted = [r for r in round_order if r in rounds]
     
+    # Calcular byes (matches con walkover en primera ronda)
+    first_round = cat_df[cat_df['Round'] == rounds_sorted[0]] if rounds_sorted else pd.DataFrame()
+    byes = len(first_round[first_round['Status'] == 'Walkover']) if not first_round.empty else 0
+    
+    return {
+        'participants': len(participants),
+        'rounds': rounds_sorted,
+        'total_rounds': len(rounds_sorted),
+        'byes': byes
+    }
+
+def render_bracket_visualization(cat_df, structure):
+    """Renderiza la visualización del bracket"""
+    
+    # Crear contenedor principal
+    bracket_html = '<div class="bracket-wrapper">'
+    
+    # Renderizar cada ronda
+    for round_name in structure['rounds']:
+        round_matches = cat_df[cat_df['Round'] == round_name].sort_values('Match_Number')
+        
+        bracket_html += f'<div class="bracket-round">'
+        bracket_html += f'<div class="round-header">{round_name.upper()}</div>'
+        
+        for _, match in round_matches.iterrows():
+            bracket_html += '<div class="bracket-match">'
+            
+            # Jugador 1
+            p1_name = "BYE" if match['Status'] == 'Walkover' and not match['P2_Name'] else (str(match['P1_Name']) if not pd.isna(match['P1_Name']) else "TBD")
+            p1_dojo = str(match['P1_Dojo']) if not pd.isna(match['P1_Dojo']) else "---"
+            p1_class = "winner" if match['Winner_ID'] == match['P1_ID'] else ""
+            
+            bracket_html += f'''
+            <div class="bracket-player top {p1_class}">
+                <span class="player-name">{p1_name}</span>
+                <span class="player-dojo">{p1_dojo}</span>
+            </div>
+            '''
+            
+            # Jugador 2 (si existe)
+            if not pd.isna(match['P2_Name']) and match['P2_Name'] != 'nan':
+                p2_name = str(match['P2_Name'])
+                p2_dojo = str(match['P2_Dojo']) if not pd.isna(match['P2_Dojo']) else "---"
+                p2_class = "winner" if match['Winner_ID'] == match['P2_ID'] else ""
+                
+                bracket_html += f'''
+                <div class="bracket-player bottom {p2_class}">
+                    <span class="player-name">{p2_name}</span>
+                    <span class="player-dojo">{p2_dojo}</span>
+                </div>
+                '''
+            elif match['Status'] != 'Walkover':
+                # Espacio para jugador pendiente
+                bracket_html += f'''
+                <div class="bracket-player bottom">
+                    <span class="player-name">TBD</span>
+                    <span class="player-dojo">---</span>
+                </div>
+                '''
+            
+            bracket_html += '</div>'
+        
+        bracket_html += '</div>'
+    
+    # Mostrar campeón
+    champion_match = cat_df[cat_df['Round'] == 'Champion']
+    if not champion_match.empty and not pd.isna(champion_match.iloc[0]['Winner']):
+        champ = champion_match.iloc[0]
+        bracket_html += f'''
+        <div class="bracket-round">
+            <div style="margin-top:40px; text-align:center;">
+                <div class="round-header">🏆 CAMPEÓN</div>
+                <div class="champion-box">
+                    {champ["Winner"]}
+                    <div class="champion-dojo">{champ.get('P1_Dojo', '') or champ.get('P2_Dojo', '')}</div>
+                </div>
+            </div>
+        </div>
+        '''
+    
+    bracket_html += '</div>'
+    
+    # Renderizar HTML
+    st.markdown(bracket_html, unsafe_allow_html=True)
+
+def render_voting_system(cat_df):
+    """Renderiza el sistema de votación"""
+    if get_tournament_stage() == "competition":
+        st.markdown("---")
+        st.markdown("#### 🗳️ SISTEMA DE VOTACIÓN")
+        
+        active_matches = cat_df[cat_df['Status'] == 'Live']
+        if not active_matches.empty:
+            st.info(f"Hay {len(active_matches)} partido(s) activo(s) para votar")
+            
+            for _, match in active_matches.iterrows():
+                with st.container():
+                    st.markdown(f"**{match['Round']} - Partido {match['Match_Number']}**")
+                    
+                    col1, col2, col3 = st.columns([2, 1, 2])
+                    with col1:
+                        p1_name = str(match['P1_Name']) if not pd.isna(match['P1_Name']) else "TBD"
+                        p1_dojo = str(match['P1_Dojo']) if not pd.isna(match['P1_Dojo']) else "---"
+                        st.markdown(f"**{p1_name}**")
+                        st.caption(p1_dojo)
+                        
+                        if st.button(f"Votar por {p1_name[:15]}...", 
+                                   key=f"vote_p1_{match['Match_ID']}",
+                                   use_container_width=True):
+                            register_vote(match['Match_ID'], match['P1_ID'])
+                    
+                    with col2:
+                        st.markdown("**VS**", help="Partido en vivo")
+                        st.metric("", f"{int(match['P1_Votes'])} - {int(match['P2_Votes'])}")
+                    
+                    with col3:
+                        if not pd.isna(match['P2_Name']):
+                            p2_name = str(match['P2_Name'])
+                            p2_dojo = str(match['P2_Dojo']) if not pd.isna(match['P2_Dojo']) else "---"
+                            st.markdown(f"**{p2_name}**")
+                            st.caption(p2_dojo)
+                            
+                            if st.button(f"Votar por {p2_name[:15]}...", 
+                                       key=f"vote_p2_{match['Match_ID']}",
+                                       use_container_width=True):
+                                register_vote(match['Match_ID'], match['P2_ID'])
+                    
+                    st.markdown("---")
+        else:
+            st.info("No hay partidos activos para votar en este momento.")
+
+def register_vote(match_id, player_id):
+    """Registra un voto para un jugador"""
+    try:
+        brackets_df = load_brackets()
+        match_mask = brackets_df['Match_ID'] == match_id
+        
+        if not brackets_df[match_mask].empty:
+            match = brackets_df[match_mask].iloc[0]
+            
+            if player_id == match['P1_ID']:
+                brackets_df.loc[match_mask, 'P1_Votes'] = match['P1_Votes'] + 1
+            elif player_id == match['P2_ID']:
+                brackets_df.loc[match_mask, 'P2_Votes'] = match['P2_Votes'] + 1
+            
+            brackets_df.loc[match_mask, 'Total_Votes'] = match['Total_Votes'] + 1
+            brackets_df.loc[match_mask, 'Last_Vote_Time'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Actualizar historial de votos
+            vote_history = json.loads(match['Vote_History']) if match['Vote_History'] else []
+            vote_history.append({
+                "player_id": player_id,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "match_id": match_id
+            })
+            brackets_df.loc[match_mask, 'Vote_History'] = json.dumps(vote_history)
+            
+            save_brackets(brackets_df)
+            
+            # Verificar si hay ganador
+            check_and_update_winner(match_id)
+            
+            st.success("✅ Voto registrado exitosamente!")
+            st.rerun()
+            
+    except Exception as e:
+        st.error(f"Error registrando voto: {str(e)}")
+        log_event("ERROR_REGISTER_VOTE", str(e))
+
+def check_and_update_winner(match_id):
+    """Verifica y actualiza el ganador de un match"""
+    try:
+        brackets_df = load_brackets()
+        match_mask = brackets_df['Match_ID'] == match_id
+        
+        if not brackets_df[match_mask].empty:
+            match = brackets_df[match_mask].iloc[0]
+            
+            # Solo actualizar si el match está en vivo y ambos jugadores tienen votos
+            if match['Status'] == 'Live' and match['P1_Votes'] + match['P2_Votes'] > 0:
+                # Determinar ganador (más votos)
+                if match['P1_Votes'] > match['P2_Votes']:
+                    winner_id = match['P1_ID']
+                    winner_name = match['P1_Name']
+                elif match['P2_Votes'] > match['P1_Votes']:
+                    winner_id = match['P2_ID']
+                    winner_name = match['P2_Name']
+                else:
+                    # Empate - no hay ganador aún
+                    return
+                
+                # Actualizar match
+                brackets_df.loc[match_mask, 'Winner_ID'] = winner_id
+                brackets_df.loc[match_mask, 'Winner'] = winner_name
+                brackets_df.loc[match_mask, 'Status'] = 'Completed'
+                brackets_df.loc[match_mask, 'Live'] = False
+                
+                # Avanzar ganador al siguiente match
+                if match['Next_Match'] and winner_id:
+                    next_match_mask = (brackets_df['Match_ID'] == match['Next_Match']) & (brackets_df['Category'] == match['Category'])
+                    
+                    if not brackets_df[next_match_mask].empty:
+                        next_match = brackets_df[next_match_mask].iloc[0]
+                        
+                        if match['Next_Position'] == 'top':
+                            brackets_df.loc[next_match_mask, 'P1_ID'] = winner_id
+                            brackets_df.loc[next_match_mask, 'P1_Name'] = winner_name
+                            brackets_df.loc[next_match_mask, 'P1_Dojo'] = match['P1_Dojo'] if winner_id == match['P1_ID'] else match['P2_Dojo']
+                        else:
+                            brackets_df.loc[next_match_mask, 'P2_ID'] = winner_id
+                            brackets_df.loc[next_match_mask, 'P2_Name'] = winner_name
+                            brackets_df.loc[next_match_mask, 'P2_Dojo'] = match['P1_Dojo'] if winner_id == match['P1_ID'] else match['P2_Dojo']
+                        
+                        # Si ambos jugadores están asignados, activar el match
+                        if (not pd.isna(brackets_df.loc[next_match_mask, 'P1_ID'].iloc[0]) and 
+                            not pd.isna(brackets_df.loc[next_match_mask, 'P2_ID'].iloc[0])):
+                            brackets_df.loc[next_match_mask, 'Status'] = 'Live'
+                            brackets_df.loc[next_match_mask, 'Live'] = True
+                
+                save_brackets(brackets_df)
+                
+                log_event("MATCH_COMPLETED", 
+                         f"Match: {match_id}, Ganador: {winner_name}, "
+                         f"Votos: {match['P1_Votes']}-{match['P2_Votes']}")
+                
+    except Exception as e:
+        log_event("ERROR_CHECK_WINNER", str(e))
+
+
+
+
+
+
     with tab1:
         st.markdown("### 📂 SELECCIONA TU CATEGORÍA")
         
-        # Mostrar categorías organizadas
+        # Mostrar categorías con información de inscritos
+        inscriptions_df = load_inscriptions()
+        
         for group, subcategories in CATEGORIES_CONFIG.items():
             st.markdown(f"#### {group}")
             cols = st.columns(len(subcategories))
+            
             for idx, subcat in enumerate(subcategories):
                 full_cat = f"{group} | {subcat}"
+                
+                # Contar inscritos confirmados en esta categoría
+                cat_inscriptions = inscriptions_df[
+                    (inscriptions_df['Categoria'] == full_cat) & 
+                    (inscriptions_df['Estado_Pago'] == 'Confirmado')
+                ]
+                num_inscritos = len(cat_inscriptions)
+                
                 with cols[idx]:
-                    if st.button(subcat, key=f"cat_{full_cat}", use_container_width=True):
+                    button_text = f"{subcat}\n\n"
+                    button_text += f"📊 {num_inscritos} inscrito{'s' if num_inscritos != 1 else ''}"
+                    
+                    if st.button(button_text, key=f"cat_{full_cat}", use_container_width=True):
                         st.session_state.view = "BRACKET"
                         st.session_state.cat = full_cat
                         st.rerun()
@@ -2276,7 +2748,7 @@ def main():
     elif st.session_state.view == "INSCRIPTION":
         render_inscription_view()
     elif st.session_state.view == "BRACKET":
-        render_bracket_view()
+        render_dynamic_bracket_view()  # <-- USAR LA NUEVA FUNCIÓN
 
 # --- 20. EJECUCIÓN PRINCIPAL ---
 if __name__ == "__main__":
