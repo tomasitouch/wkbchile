@@ -5,4 +5,4 @@ mercadopago
 Pillow
 numpy
 scipy
-
+plotly
