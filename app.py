@@ -1297,7 +1297,7 @@ def show_payment_section():
 
     # Crear preferencia de pago
     with st.spinner("🔄 Preparando pago seguro..."):
-        base_url = st.secrets.get("public_url", "https://wkbchile.streamlit.app")
+        base_url = st.secrets.get("public_url", "https://wkbchile-br5ucwq5ptkox2fnxasjyp.streamlit.app/")
         preference = create_mercadopago_preference(
             total_amount=total_price,
             description=description,
