@@ -2,3 +2,5 @@ streamlit
 pandas
 st-gsheets-connection
 Pillow
+numpy
+scipy
