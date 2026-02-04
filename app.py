@@ -1355,61 +1355,44 @@ def show_payment_result():
 
 
 def show_payment_success():
-    """Muestra pantalla de pago exitoso"""
+    """Muestra pantalla de pago exitoso renderizando correctamente"""
     render_header()
     
-    # Animación de éxito
-    st.markdown("""
-    <div class="success-animation">
-        <div class="success-icon">🎉</div>
-        <h1 style="color: #10B981;">¡PAGO EXITOSO!</h1>
-        <p style="font-size: 20px; color: #9ca3af;">Tu inscripción ha sido confirmada</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # 1. Título con diseño nativo de Streamlit
+    st.balloons() # ¡Confeti de celebración!
+    st.success("# ¡PAGO EXITOSO!")
+    st.write("Tu inscripción ha sido confirmada con éxito.")
     
-    # Mostrar detalles
-    st.markdown(f"""
-    <div style='background: #1f2937; padding: 30px; border-radius: 15px; margin: 30px 0; border: 2px solid #10B981;'>
-        <h3 style='color: #FDB931; text-align: center;'>✅ INSCRIPCIÓN CONFIRMADA</h3>
-        
-        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px;'>
-            <div style='background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px;'>
-                <div style='color: #9ca3af; font-size: 14px;'>CÓDIGO DE INSCRIPCIÓN</div>
-                <div style='color: #FDB931; font-size: 24px; font-weight: bold; letter-spacing: 2px;'>{st.session_state.inscription_code}</div>
-            </div>
-            
-            <div style='background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px;'>
-                <div style='color: #9ca3af; font-size: 14px;'>ESTADO</div>
-                <div style='color: #10B981; font-size: 20px; font-weight: bold;'>CONFIRMADO ✓</div>
-            </div>
-        </div>
-        
-        <div style='margin-top: 30px; padding: 20px; background: rgba(253, 185, 49, 0.1); border-radius: 10px;'>
-            <h4 style='color: #FDB931; margin-top: 0;'>📧 PRÓXIMOS PASOS</h4>
-            <p style='color: #e5e7eb;'>
-                • Recibirás un correo de confirmación con todos los detalles<br>
-                • Guarda tu código de inscripción para cualquier consulta<br>
-                • Revisa las fechas y horarios del torneo<br>
-                • Prepárate para competir
-            </p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Acciones posteriores
+    # 2. Recuadro de información clave (sin HTML complejo)
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🏠 VOLVER AL INICIO", type="primary", use_container_width=True):
-            # Resetear estado
-            st.session_state.inscription_step = 1
-            st.session_state.current_participant = {}
-            st.session_state.group_participants = []
-            st.session_state.payment_processed = False
-            st.session_state.payment_status = None
-            st.session_state.inscription_code = None
-            st.session_state.view = "HOME"
-            st.rerun()
+    col_info1, col_info2 = st.columns(2)
+    
+    with col_info1:
+        st.info("**CÓDIGO DE INSCRIPCIÓN**\n\n" + str(st.session_state.inscription_code))
+        
+    with col_info2:
+        st.info("**ESTADO DE PAGO**\n\nCONFIRMADO ✓")
+
+    # 3. Próximos pasos con diseño limpio
+    st.markdown("---")
+    st.markdown("### 📧 PRÓXIMOS PASOS")
+    st.warning("- Recibirás un correo de confirmación con todos los detalles.\n- Guarda tu código de inscripción para cualquier consulta.\n- Revisa las fechas y horarios del torneo.\n- ¡Prepárate para competir!")
+    
+    # 4. Botón de retorno
+    st.markdown("---")
+    if st.button("🏠 VOLVER AL INICIO", type="primary", use_container_width=True):
+        # Resetear estado de inscripción para una nueva
+        st.session_state.inscription_step = 1
+        st.session_state.current_participant = {}
+        st.session_state.group_participants = []
+        st.session_state.payment_processed = False
+        st.session_state.payment_status = None
+        st.session_state.inscription_code = None
+        st.session_state.view = "HOME"
+        st.rerun()
+
+
+
 
 def show_payment_failure():
     """Muestra pantalla de pago fallido"""
