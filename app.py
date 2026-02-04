@@ -868,6 +868,44 @@ def reset_all_data():
         st.error(f"Error reseteando datos: {str(e)}")
         return False
 
+
+
+
+
+def render_header():
+    logo_org = "https://cdn-icons-png.flaticon.com/512/1603/1603754.png" 
+    logo_spon1 = "https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg" 
+    logo_spon2 = "https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"
+    
+    # Mostrar etapa actual del torneo
+    tournament_stage = get_tournament_stage()
+    stage_text = "INSCRIPCIONES ABIERTAS" if tournament_stage == "inscription" else "COMPETICIÓN EN CURSO"
+    stage_class = "stage-open" if tournament_stage == "inscription" else "stage-closed"
+    
+    st.markdown(f"""
+    <div class="header-container">
+        <div class="header-title">
+            <img src="{logo_org}" height="50" style="margin-right:15px; filter: drop-shadow(0 0 5px rgba(255,255,255,0.3));">
+            <div>
+                <h2 style="margin:0; color:white;">WKB CHILE 
+                    <span class="stage-badge {stage_class}">{stage_text}</span>
+                </h2>
+                <small style="color:#FDB931; font-weight:bold; letter-spacing: 1px;">OFFICIAL TOURNAMENT HUB</small>
+            </div>
+        </div>
+        <div class="header-sponsors">
+            <div style="color:#666; font-size:10px; margin-bottom:5px; letter-spacing:1px;">POWERED BY</div>
+            <div class="sponsor-logos">
+                <img src="{logo_spon1}" class="sponsor-logo">
+                <img src="{logo_spon2}" class="sponsor-logo">
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+    
+
 # --- 14. VISTA DE INSCRIPCIÓN MEJORADA (AUTOMÁTICA) ---
 def render_inscription_view():
     """Vista principal de inscripción con confirmación automática"""
