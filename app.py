@@ -2037,157 +2037,36 @@ def close_registration_and_generate_brackets():
         return False
 
 # --- 17. VISTA DE BRACKETS PROFESIONALES ---
+
+
+
+
+
+
+
+
+# Versión de prueba mínima
 def render_bracket_view():
-    """Vista de Brackets con estilo de llaves horizontales profesionales"""
     cat = st.session_state.cat
     st.markdown(f"### 🏆 COMPETENCIA: {cat}")
     
-    brackets_df = load_brackets()
-    if brackets_df.empty:
-        st.info("Los brackets se están generando. Por favor espera.")
-        return
+    # HTML de prueba simple
+    test_html = """
+    <div style="background: #1f2937; padding: 20px; border-radius: 10px; border: 2px solid #FDB931;">
+        <h3 style="color: #FDB931; text-align: center;">BRACKET DE PRUEBA</h3>
+        <div style="color: white; text-align: center;">
+            <p>Si ves esto en colores, el HTML funciona</p>
+            <p style="color: #10B981;">✓ Verde si funciona</p>
+        </div>
+    </div>
+    """
+    
+    st.markdown(test_html, unsafe_allow_html=True)
+    
+    # Si esto funciona, el problema está en tu HTML generado
 
-    cat_df = brackets_df[brackets_df['Category'] == cat]
-    
-    # Organizar partidos por rondas
-    qf = cat_df[cat_df['Round'] == 'Quarterfinal'].sort_values('Match_Number')
-    sf = cat_df[cat_df['Round'] == 'Semifinal'].sort_values('Match_Number')
-    fn = cat_df[cat_df['Round'] == 'Final']
 
-    def draw_player(name, dojo, votes=0, is_winner=False, position="top", player_id="", match_id=""):
-        win_class = "winner" if is_winner else ""
-        display_name = name if name else "TBD"
-        display_dojo = dojo if dojo else "---"
-        vote_display = f"<span class='player-votes'>{votes} votos</span>" if votes > 0 else ""
-        
-        # Botón de voto (solo si hay dos jugadores y el partido está activo)
-        vote_button = ""
-        if name and name != "TBD" and match_id and get_tournament_stage() == "competition":
-            vote_button = f'<button class="vote-button" onclick="voteForPlayer(\'{match_id}\', \'{player_id}\')">Votar 👍</button>'
-        
-        return f'''
-        <div class="bracket-player {position} {win_class}">
-            <span class="player-name">{display_name}</span>
-            <span class="player-dojo">{display_dojo}</span>
-            {vote_display}
-            {vote_button}
-        </div>'''
 
-    # Construcción del HTML del Bracket
-    bracket_html = '<div class="bracket-wrapper">'
-    
-    # COLUMNA 1: CUARTOS DE FINAL
-    bracket_html += '<div class="bracket-round"><div class="round-header">CUARTOS DE FINAL</div>'
-    for _, match in qf.iterrows():
-        bracket_html += '<div class="bracket-match">'
-        bracket_html += draw_player(match['P1_Name'], match['P1_Dojo'], match['P1_Votes'], 
-                                   match['Winner_ID'] == match['P1_ID'], "top", match['P1_ID'], match['Match_ID'])
-        bracket_html += draw_player(match['P2_Name'], match['P2_Dojo'], match['P2_Votes'],
-                                   match['Winner_ID'] == match['P2_ID'], "bottom", match['P2_ID'], match['Match_ID'])
-        bracket_html += '</div>'
-    bracket_html += '</div>'
-
-    # COLUMNA 2: SEMIFINALES
-    bracket_html += '<div class="bracket-round"><div class="round-header">SEMIFINALES</div>'
-    for _, match in sf.iterrows():
-        bracket_html += '<div class="bracket-match">'
-        bracket_html += draw_player(match['P1_Name'], match['P1_Dojo'], match['P1_Votes'],
-                                   match['Winner_ID'] == match['P1_ID'], "top", match['P1_ID'], match['Match_ID'])
-        bracket_html += draw_player(match['P2_Name'], match['P2_Dojo'], match['P2_Votes'],
-                                   match['Winner_ID'] == match['P2_ID'], "bottom", match['P2_ID'], match['Match_ID'])
-        bracket_html += '</div>'
-    bracket_html += '</div>'
-
-    # COLUMNA 3: FINAL Y CAMPEÓN
-    bracket_html += '<div class="bracket-round"><div class="round-header">GRAN FINAL</div>'
-    for _, match in fn.iterrows():
-        bracket_html += '<div class="bracket-match">'
-        bracket_html += draw_player(match['P1_Name'], match['P1_Dojo'], match['P1_Votes'],
-                                   match['Winner_ID'] == match['P1_ID'], "top", match['P1_ID'], match['Match_ID'])
-        bracket_html += draw_player(match['P2_Name'], match['P2_Dojo'], match['P2_Votes'],
-                                   match['Winner_ID'] == match['P2_ID'], "bottom", match['P2_ID'], match['Match_ID'])
-        bracket_html += '</div>'
-        
-        # Cuadro de Campeón
-        if match['Winner']:
-            winner_dojo = match['P1_Dojo'] if match['Winner_ID'] == match['P1_ID'] else match['P2_Dojo']
-            bracket_html += f'''
-            <div style="margin-top:40px; text-align:center;">
-                <div class="round-header">🏆 CAMPEÓN</div>
-                <div class="champion-box">
-                    {match["Winner"]}
-                    <div class="champion-dojo">{winner_dojo}</div>
-                </div>
-            </div>'''
-    bracket_html += '</div>'
-
-    bracket_html += '</div>'
-    
-    # JavaScript para manejar votos
-    bracket_html += '''
-    <script>
-    function voteForPlayer(matchId, playerId) {
-        // Aquí iría la lógica para enviar el voto al backend
-        alert('Voto registrado para el jugador ' + playerId + ' en el partido ' + matchId);
-        // En una implementación real, usarías fetch() para enviar el voto al servidor
-    }
-    </script>
-    '''
-    
-    # Renderizar el bracket
-    st.markdown(bracket_html, unsafe_allow_html=True)
-    
-    # Estadísticas del bracket
-    st.markdown("---")
-    st.markdown("#### 📊 ESTADÍSTICAS DEL BRACKET")
-    
-    total_matches = len(cat_df)
-    completed_matches = len(cat_df[cat_df['Status'] == 'Completed'])
-    total_votes = cat_df['Total_Votes'].sum() if 'Total_Votes' in cat_df.columns else 0
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Partidos Totales", total_matches)
-    with col2:
-        st.metric("Partidos Completados", completed_matches)
-    with col3:
-        st.metric("Total de Votos", int(total_votes))
-    
-    # Sistema de votación (solo en etapa de competencia)
-    if get_tournament_stage() == "competition":
-        st.markdown("---")
-        st.markdown("#### 🗳️ SISTEMA DE VOTACIÓN")
-        
-        with st.expander("Votar en partidos activos"):
-            active_matches = cat_df[cat_df['Status'] == 'Live']
-            if not active_matches.empty:
-                for _, match in active_matches.iterrows():
-                    col1, col2, col3 = st.columns([2, 1, 2])
-                    with col1:
-                        st.markdown(f"**{match['P1_Name']}** ({match['P1_Dojo']})")
-                    with col2:
-                        st.markdown("**VS**")
-                    with col3:
-                        st.markdown(f"**{match['P2_Name']}** ({match['P2_Dojo']})")
-                    
-                    vote_col1, vote_col2, vote_col3 = st.columns(3)
-                    with vote_col1:
-                        if st.button(f"👍 {match['P1_Name']}", key=f"vote_p1_{match['Match_ID']}"):
-                            # Lógica para registrar voto
-                            st.success(f"Voto registrado para {match['P1_Name']}")
-                    with vote_col2:
-                        st.markdown(f"**{match['P1_Votes']} - {match['P2_Votes']}**", help="Votos actuales")
-                    with vote_col3:
-                        if st.button(f"👍 {match['P2_Name']}", key=f"vote_p2_{match['Match_ID']}"):
-                            # Lógica para registrar voto
-                            st.success(f"Voto registrado para {match['P2_Name']}")
-            else:
-                st.info("No hay partidos activos para votar en este momento.")
-    
-    st.markdown("---")
-    if st.button("🏠 VOLVER AL INICIO", use_container_width=True):
-        st.session_state.view = "HOME"
-        st.rerun()
 
 # --- 18. VISTA HOME PRINCIPAL ---
 def render_home_view():
