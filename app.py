@@ -2558,7 +2558,39 @@ def check_and_update_winner(match_id):
 
 
 
-
+    
+# --- 18. VISTA HOME PRINCIPAL ---
+def render_home_view():
+    """Vista principal del sistema"""
+    render_header()
+    
+    # Mostrar estado del torneo
+    tournament_stage = get_tournament_stage()
+    
+    if tournament_stage == "inscription":
+        st.markdown('<div class="alert-success">🎯 <strong>ETAPA DE INSCRIPCIÓN ABIERTA</strong> - Puedes inscribirte en las categorías disponibles</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="alert-info">🏆 <strong>ETAPA DE COMPETICIÓN</strong> - Los brackets están activos y puedes votar</div>', unsafe_allow_html=True)
+    
+    # Estadísticas rápidas
+    inscriptions_df = load_inscriptions()
+    if not inscriptions_df.empty:
+        total_inscritos = len(inscriptions_df)
+        confirmados = len(inscriptions_df[inscriptions_df['Estado_Pago'] == 'Confirmado']) if 'Estado_Pago' in inscriptions_df.columns else 0
+        pendientes = total_inscritos - confirmados
+        
+        st.markdown("#### 📊 ESTADÍSTICAS DEL TORNEO")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Inscritos", total_inscritos)
+        with col2:
+            st.metric("Confirmados", confirmados)
+        with col3:
+            st.metric("Pendientes", pendientes)
+    
+    # Navegación principal
+    tab1, tab2, tab3, tab4 = st.tabs(["🏆 CATEGORÍAS", "📝 INSCRIBIRSE", "👥 INSCRITOS", "⚙️ ADMIN"])
+    
     with tab1:
         st.markdown("### 📂 SELECCIONA TU CATEGORÍA")
         
@@ -2592,9 +2624,14 @@ def check_and_update_winner(match_id):
         if tournament_stage == "competition":
             st.warning("⚠️ Las inscripciones están cerradas. El torneo está en etapa de competencia.")
             if st.button("🏆 VER BRACKETS", type="primary", use_container_width=True):
-                st.session_state.view = "BRACKET"
-                st.session_state.cat = ALL_CATEGORIES[0] if ALL_CATEGORIES else ""
-                st.rerun()
+                # Mostrar categoría con más participantes
+                inscriptions_df = load_inscriptions()
+                if not inscriptions_df.empty:
+                    cat_counts = inscriptions_df[inscriptions_df['Estado_Pago'] == 'Confirmado']['Categoria'].value_counts()
+                    if not cat_counts.empty:
+                        st.session_state.cat = cat_counts.index[0]
+                        st.session_state.view = "BRACKET"
+                        st.rerun()
         else:
             if st.button("📝 COMENZAR INSCRIPCIÓN", type="primary", use_container_width=True):
                 st.session_state.view = "INSCRIPTION"
@@ -2718,6 +2755,60 @@ def check_and_update_winner(match_id):
                                 st.success("✅ Sistema reseteado exitosamente")
                                 time.sleep(2)
                                 st.rerun()
+
+# --- 19. GESTIÓN PRINCIPAL DE LA APLICACIÓN ---
+def main():
+    """Función principal de la aplicación"""
+    
+    # Inicializar variables de sesión
+    if 'view' not in st.session_state:
+        st.session_state.view = "HOME"
+    if 'cat' not in st.session_state:
+        st.session_state.cat = None
+    if 'is_admin' not in st.session_state:
+        st.session_state.is_admin = False
+    
+    # Verificar e inicializar configuración
+    try:
+        config_df = load_config()
+        if config_df.empty:
+            with st.spinner("Inicializando sistema..."):
+                initialize_sheets()
+    except Exception as e:
+        log_event("ERROR_INITIAL_CHECK", str(e))
+        with st.spinner("Inicializando sistema por primera vez..."):
+            initialize_sheets()
+    
+    # Navegación entre vistas
+    if st.session_state.view == "HOME":
+        render_home_view()
+    elif st.session_state.view == "INSCRIPTION":
+        render_inscription_view()
+    elif st.session_state.view == "BRACKET":
+        render_dynamic_bracket_view()  # <-- USAR LA NUEVA FUNCIÓN
+
+# --- 20. EJECUCIÓN PRINCIPAL ---
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        st.error(f"❌ Error crítico en la aplicación: {str(e)}")
+        log_event("CRITICAL_ERROR", str(e))
+        st.info("""
+        **🛠️ Solución de problemas:**
+        1. Recarga la página
+        2. Verifica tu conexión a internet
+        3. Si el problema persiste, contacta al administrador
+        
+        **📧 Contacto:** admin@wkbchile.cl
+        """)
+        
+        # Opción para resetear la aplicación
+        if st.button("🔄 REINICIAR APLICACIÓN", type="primary"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.session_state.clear()
+            st.rerun()
 
 # --- 19. GESTIÓN PRINCIPAL DE LA APLICACIÓN ---
 def main():
