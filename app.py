@@ -43,6 +43,27 @@ SHEET_NAMES = {
 # --- 3. CREDENCIALES MERCADO PAGO ---
 # Configuración de Mercado Pago (usa tus credenciales reales)
 
+def confirm_inscription_manually(inscription_code):
+    """Confirma una inscripción manualmente sin pasar por Mercado Pago"""
+    try:
+        inscriptions_df = load_inscriptions()
+        mask = inscriptions_df["Codigo_Pago"] == inscription_code
+        
+        if not inscriptions_df[mask].empty:
+            # Actualizar campos de estado
+            inscriptions_df.loc[mask, "Estado_Pago"] = "Confirmado"
+            inscriptions_df.loc[mask, "MP_Payment_ID"] = f"MANUAL-{uuid.uuid4().hex[:8].upper()}"
+            inscriptions_df.loc[mask, "MP_Status"] = "approved"
+            inscriptions_df.loc[mask, "MP_Date_Approved"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            inscriptions_df.loc[mask, "Estado"] = "Inscrito"
+            
+            save_inscriptions(inscriptions_df)
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error en confirmación manual: {str(e)}")
+        return False
+
 
 MP_PUBLIC_KEY = st.secrets["mercadopago"]["public_key"]
 MP_ACCESS_TOKEN = st.secrets["mercadopago"]["access_token"]
@@ -1339,13 +1360,13 @@ def show_payment_section():
         # Mostrar botón de pago
         payment_url = preference["init_point"]
         
-        st.markdown(f"""
+        st.markdown(f""
         <a href="{payment_url}" target="_blank">
             <button class="mercado-pago-btn">
                 💳 PAGAR ${total_price:,.0f} CON MERCADO PAGO
             </button>
         </a>
-        """, unsafe_allow_html=True)
+        "", unsafe_allow_html=True)
         
         # Mostrar ID de la preferencia para debugging
         st.caption(f"ID de preferencia: {preference.get('id')}")
@@ -1370,6 +1391,8 @@ def show_payment_section():
         st.session_state.inscription_step = 2
         st.rerun()
 
+
+
 def show_payment_result():
     """Muestra el resultado del pago"""
     if st.session_state.payment_status == "success":
@@ -1378,6 +1401,8 @@ def show_payment_result():
         show_payment_failure()
     elif st.session_state.payment_status == "pending":
         show_payment_pending()
+
+
 
 def show_payment_success():
     """Muestra pantalla de pago exitoso"""
