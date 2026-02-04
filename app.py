@@ -1390,6 +1390,19 @@ def show_payment_section():
                 type="secondary"):
         st.session_state.inscription_step = 2
         st.rerun()
+                    
+# --- BOTÓN DE CONFIRMACIÓN DIRECTA (PARA PRUEBAS) ---
+    st.markdown("---")
+    with st.expander("🛠️ OPCIONES DE DESARROLLADOR"):
+        st.warning("Este botón confirma la inscripción inmediatamente sin cobrar.")
+        if st.button("✅ CONFIRMAR INSCRIPCIÓN DIRECTAMENTE", use_container_width=True):
+            if confirm_inscription_manually(st.session_state.inscription_code):
+                st.session_state.payment_processed = True
+                st.session_state.payment_status = "success"
+                st.success("Inscripción confirmada manualmente.")
+                time.sleep(1)
+                st.rerun()
+
 
 
 
