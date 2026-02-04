@@ -872,6 +872,31 @@ def get_payment_status(payment_id):
         return None
 
 # --- 12. FUNCIONES DE UTILIDAD ---
+
+def render_header():
+    """Renderiza el encabezado con el logo y sponsors"""
+    st.markdown(f"""
+    <div class="header-container">
+        <div class="header-title">
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <span style="font-size: 40px;">🥋</span>
+                <div>
+                    <h1 style="margin: 0; color: white; font-size: 24px;">WKB Official Hub</h1>
+                    <p style="margin: 0; color: #FDB931; font-size: 14px;">World Kyokushin Budokai Chile</p>
+                </div>
+            </div>
+        </div>
+        <div class="header-sponsors">
+            <div style="color: #9ca3af; font-size: 10px; margin-bottom: 5px; text-transform: uppercase;">Official Sponsors</div>
+            <div class="sponsor-logos">
+                <span style="font-size: 20px;" title="Sponsor 1">🏆</span>
+                <span style="font-size: 20px;" title="Sponsor 2">🔥</span>
+                <span style="font-size: 20px;" title="Sponsor 3">🛡️</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
 def image_to_base64(image):
     buffered = io.BytesIO()
     image.save(buffered, format="JPEG")
