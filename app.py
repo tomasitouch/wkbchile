@@ -2304,79 +2304,72 @@ def analyze_bracket_structure(cat_df):
         'byes': byes
     }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def render_bracket_visualization(cat_df, structure):
-    """Renderiza la visualización del bracket"""
-    
-    # Crear contenedor principal
+    """Renderiza la visualización del bracket con conectores CSS"""
+    # Contenedor con scroll horizontal
     bracket_html = '<div class="bracket-wrapper">'
     
-    # Renderizar cada ronda
+    # Iterar por las rondas detectadas
     for round_name in structure['rounds']:
         round_matches = cat_df[cat_df['Round'] == round_name].sort_values('Match_Number')
         
-        bracket_html += f'<div class="bracket-round">'
-        bracket_html += f'<div class="round-header">{round_name.upper()}</div>'
+        bracket_html += '<div class="bracket-round">'
+        bracket_html += '<div class="round-header">' + round_name.upper() + '</div>'
         
         for _, match in round_matches.iterrows():
+            # Determinar clases de ganador
+            p1_win = "winner" if str(match['Winner_ID']) == str(match['P1_ID']) and str(match['P1_ID']) != "" else ""
+            p2_win = "winner" if str(match['Winner_ID']) == str(match['P2_ID']) and str(match['P2_ID']) != "" else ""
+            
+            p1_name = str(match['P1_Name']) if not pd.isna(match['P1_Name']) else "TBD"
+            p2_name = str(match['P2_Name']) if not pd.isna(match['P2_Name']) else "TBD"
+            
             bracket_html += '<div class="bracket-match">'
+            # Jugador Superior
+            bracket_html += '<div class="bracket-player top ' + p1_win + '">'
+            bracket_html += '<span class="player-name">' + p1_name + '</span>'
+            bracket_html += '<span class="player-dojo">' + str(match['P1_Dojo'] or "") + '</span></div>'
             
-            # Jugador 1
-            p1_name = "BYE" if match['Status'] == 'Walkover' and not match['P2_Name'] else (str(match['P1_Name']) if not pd.isna(match['P1_Name']) else "TBD")
-            p1_dojo = str(match['P1_Dojo']) if not pd.isna(match['P1_Dojo']) else "---"
-            p1_class = "winner" if match['Winner_ID'] == match['P1_ID'] else ""
-            
-            bracket_html += f'''
-            <div class="bracket-player top {p1_class}">
-                <span class="player-name">{p1_name}</span>
-                <span class="player-dojo">{p1_dojo}</span>
-            </div>
-            '''
-            
-            # Jugador 2 (si existe)
-            if not pd.isna(match['P2_Name']) and match['P2_Name'] != 'nan':
-                p2_name = str(match['P2_Name'])
-                p2_dojo = str(match['P2_Dojo']) if not pd.isna(match['P2_Dojo']) else "---"
-                p2_class = "winner" if match['Winner_ID'] == match['P2_ID'] else ""
-                
-                bracket_html += f'''
-                <div class="bracket-player bottom {p2_class}">
-                    <span class="player-name">{p2_name}</span>
-                    <span class="player-dojo">{p2_dojo}</span>
-                </div>
-                '''
-            elif match['Status'] != 'Walkover':
-                # Espacio para jugador pendiente
-                bracket_html += f'''
-                <div class="bracket-player bottom">
-                    <span class="player-name">TBD</span>
-                    <span class="player-dojo">---</span>
-                </div>
-                '''
-            
+            # Jugador Inferior
+            bracket_html += '<div class="bracket-player bottom ' + p2_win + '">'
+            bracket_html += '<span class="player-name">' + p2_name + '</span>'
+            bracket_html += '<span class="player-dojo">' + str(match['P2_Dojo'] or "") + '</span></div>'
             bracket_html += '</div>'
-        
+            
         bracket_html += '</div>'
     
-    # Mostrar campeón
-    champion_match = cat_df[cat_df['Round'] == 'Champion']
-    if not champion_match.empty and not pd.isna(champion_match.iloc[0]['Winner']):
-        champ = champion_match.iloc[0]
-        bracket_html += f'''
-        <div class="bracket-round">
-            <div style="margin-top:40px; text-align:center;">
-                <div class="round-header">🏆 CAMPEÓN</div>
-                <div class="champion-box">
-                    {champ["Winner"]}
-                    <div class="champion-dojo">{champ.get('P1_Dojo', '') or champ.get('P2_Dojo', '')}</div>
-                </div>
-            </div>
-        </div>
-        '''
-    
     bracket_html += '</div>'
-    
-    # Renderizar HTML
     st.markdown(bracket_html, unsafe_allow_html=True)
+
+
+
+
+
 
 def render_voting_system(cat_df):
     """Renderiza el sistema de votación"""
