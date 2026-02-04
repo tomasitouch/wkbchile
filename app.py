@@ -32,6 +32,35 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1hFlkSSPWqoQDSjkiPV5uaIIx-iH
 # --- 2. SEGURIDAD MEJORADA ---
 ADMIN_TOKEN_HASH = "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9"
 
+
+
+# --- ACCESO ADMIN SUPER FÁCIL ---
+def render_admin_access():
+    """Muestra un botón secreto para acceso admin"""
+    # Solo mostrar si NO es admin (si ya es admin, no necesita el botón)
+    if not st.session_state.get('is_admin', False):
+        # Usamos columnas para ponerlo discretamente en el header
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col5:
+            # Botón secreto con icono pequeño
+            if st.button("🔑", help="Acceso admin (contraseña: admin123)", 
+                        use_container_width=True):
+                # Mostrar diálogo de contraseña
+                with st.popover("🔐 Acceso Administrativo"):
+                    st.markdown("#### Ingresa la contraseña admin")
+                    password = st.text_input("Contraseña:", type="password", 
+                                           placeholder="admin123")
+                    
+                    if st.button("Ingresar", type="primary"):
+                        if check_admin(password):
+                            st.session_state.is_admin = True
+                            st.success("✅ Acceso concedido!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ Contraseña incorrecta")
+
+
 def check_admin(password):
     return hashlib.sha256(password.encode()).hexdigest() == ADMIN_TOKEN_HASH
 
@@ -1168,6 +1197,7 @@ def calculate_price(participants_count):
 # --- 8. VISTA HOME MEJORADA ---
 if st.session_state.view == "HOME":
     render_header()
+    render_admin_access()
     
     # Mostrar mensaje según estado del torneo
     if tournament_status == "closed":
