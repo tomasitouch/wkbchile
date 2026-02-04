@@ -1363,7 +1363,7 @@ def show_payment_section():
         st.markdown(f""
         <a href="{payment_url}" target="_blank">
             <button class="mercado-pago-btn">
-                💳 PAGAR ${total_price:,.0f} CON MERCADO PAGO
+                PAGAR ${total_price:,.0f} CON MERCADO PAGO
             </button>
         </a>
         "", unsafe_allow_html=True)
