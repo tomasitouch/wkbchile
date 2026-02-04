@@ -42,8 +42,10 @@ SHEET_NAMES = {
 
 # --- 3. CREDENCIALES MERCADO PAGO ---
 # Configuración de Mercado Pago (usa tus credenciales reales)
-MP_PUBLIC_KEY = "APP_USR-495b1931-41ea-42ac-a819-41a1f2ea86c8"
-MP_ACCESS_TOKEN = "APP_USR-4096671526149259-102602-9cc00088fd461fc8e67c88dd13e38b1b-2946107850"
+
+
+MP_PUBLIC_KEY = st.secrets["mercadopago"]["public_key"]
+MP_ACCESS_TOKEN = st.secrets["mercadopago"]["access_token"]
 
 # Inicializar SDK de Mercado Pago
 def init_mercadopago():
