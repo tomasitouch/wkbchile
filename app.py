@@ -306,15 +306,18 @@ st.markdown("""
         padding: 0 20px;
     }
     
-    .bracket-round:not(:last-child)::after {
-        content: "";
-        position: absolute;
-        right: 0;
-        top: 50px;
-        bottom: 50px;
-        width: 50px;
-        background: linear-gradient(90deg, transparent, rgba(55, 65, 81, 0.3));
-        z-index: -1;
+
+
+    .bracket-round {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-around; /* Esto estira los partidos para que conecten con la siguiente ronda */
+        width: 280px;
+        flex-shrink: 0;
+        min-height: 600px;
+    
+
+    
     }
     
     .bracket-match {
@@ -1949,105 +1952,69 @@ def show_payment_pending():
 
 # --- 16. FUNCIONES DE BRACKETS ---
 
-
-
 def generate_dynamic_brackets_for_category(category):
-    """Genera brackets dinámicos según la cantidad de participantes"""
     try:
         brackets_df = load_brackets()
         inscriptions_df = load_inscriptions()
         
-        if inscriptions_df.empty:
-            st.warning(f"No hay inscritos en {category}")
+        # Filtrar solo confirmados
+        confirmed = inscriptions_df[(inscriptions_df['Categoria'] == category) & 
+                                   (inscriptions_df['Estado_Pago'] == 'Confirmado')].to_dict('records')
+        
+        num_p = len(confirmed)
+        if num_p < 2:
+            st.warning(f"Insuficientes participantes en {category}")
             return False
+            
+        random.shuffle(confirmed)
         
-        category_inscriptions = inscriptions_df[
-            (inscriptions_df['Categoria'] == category) & 
-            (inscriptions_df['Estado_Pago'] == 'Confirmado')
-        ]
+        # Potencia de 2 superior
+        slots = 1
+        while slots < num_p: slots *= 2
         
-        participants = category_inscriptions.to_dict('records')
-        num_participants = len(participants)
+        # Rondas necesarias
+        num_rounds = int(math.log2(slots))
         
-        if num_participants < 2:
-            st.warning(f"No hay suficientes inscritos confirmados en {category} (mínimo 2)")
-            return False
-        
-        random.shuffle(participants)
-        
-        # CALCULAR ESTRUCTURA DEL BRACKET
-        bracket_structure = calculate_bracket_structure(num_participants)
-        
-        # Limpiar brackets existentes para esta categoría
+        # Limpiar categoría
         brackets_df = brackets_df[brackets_df['Category'] != category]
         
-        all_brackets = []
-        
-        # Generar todas las rondas
-        for round_num, round_info in enumerate(bracket_structure['rounds']):
-            round_name = round_info['name']
-            num_matches = round_info['matches']
-            next_round_matches = bracket_structure['rounds'][round_num + 1]['matches'] if round_num + 1 < len(bracket_structure['rounds']) else 1
+        new_matches = []
+        # Crear estructura vacía
+        for r in range(1, num_rounds + 1):
+            r_matches = slots // (2**r)
+            r_name = "Final" if r == num_rounds else f"Ronda {r}"
+            prefix = f"R{r}M"
             
-            for match_num in range(1, num_matches + 1):
-                match_id = f"{round_info['prefix']}{match_num}"
-                
-                bracket_entry = {
-                    "Category": category,
-                    "Match_ID": match_id,
-                    "Round": round_name,
-                    "Match_Number": match_num,
-                    "P1_Name": "", "P1_ID": "", "P1_Dojo": "", "P1_Votes": 0,
-                    "P2_Name": "", "P2_ID": "", "P2_Dojo": "", "P2_Votes": 0,
-                    "Winner": "", "Winner_ID": "", "Live": False, "Status": "Pending",
-                    "Total_Votes": 0, "Vote_History": "[]", "Last_Vote_Time": "",
-                    "Next_Match": f"{bracket_structure['rounds'][round_num + 1]['prefix']}{((match_num + 1) // 2)}" if round_num + 1 < len(bracket_structure['rounds']) else "",
-                    "Next_Position": "top" if match_num % 2 == 1 else "bottom" if round_num + 1 < len(bracket_structure['rounds']) else ""
-                }
-                
-                all_brackets.append(bracket_entry)
+            for m in range(1, r_matches + 1):
+                new_matches.append({
+                    "Category": category, "Match_ID": f"{prefix}{m}",
+                    "Round": r_name, "Match_Number": m,
+                    "P1_Name": "", "P1_ID": "", "P2_Name": "", "P2_ID": "",
+                    "Winner": "", "Winner_ID": "", "Status": "Pending", "Next_Match": f"R{r+1}M{(m+1)//2}" if r < num_rounds else "CHAMPION"
+                })
+
+        temp_df = pd.DataFrame(new_matches)
         
-        # Agregar entrada para el campeón
-        all_brackets.append({
-            "Category": category,
-            "Match_ID": "CHAMPION",
-            "Round": "Champion",
-            "Match_Number": 1,
-            "P1_Name": "", "P1_ID": "", "P1_Dojo": "", "P1_Votes": 0,
-            "P2_Name": "", "P2_ID": "", "P2_Dojo": "", "P2_Votes": 0,
-            "Winner": "", "Winner_ID": "", "Live": False, "Status": "Pending",
-            "Total_Votes": 0, "Vote_History": "[]", "Last_Vote_Time": "",
-            "Next_Match": "", "Next_Position": ""
-        })
-        
-        # Convertir a DataFrame
-        new_brackets_df = pd.DataFrame(all_brackets)
-        brackets_df = pd.concat([brackets_df, new_brackets_df], ignore_index=True)
-        
-        # Asignar participantes a la primera ronda
-        assign_participants_to_first_round(brackets_df, category, participants)
-        
+        # Asignar participantes a R1 y manejar BYEs
+        for i in range(slots // 2):
+            idx1, idx2 = i*2, i*2 + 1
+            m_id = f"R1M{i+1}"
+            
+            p1 = confirmed[idx1] if idx1 < num_p else None
+            p2 = confirmed[idx2] if idx2 < num_p else None
+            
+            if p1 and p2:
+                temp_df.loc[temp_df['Match_ID'] == m_id, ['P1_Name', 'P1_ID', 'P1_Dojo', 'P2_Name', 'P2_ID', 'P2_Dojo', 'Status']] = [p1['Nombre_Completo'], p1['ID'], p1['Dojo'], p2['Nombre_Completo'], p2['ID'], p2['Dojo'], 'Live']
+            elif p1: # Es un BYE
+                temp_df.loc[temp_df['Match_ID'] == m_id, ['P1_Name', 'P1_ID', 'P1_Dojo', 'Winner', 'Winner_ID', 'Status']] = [p1['Nombre_Completo'], p1['ID'], p1['Dojo'], p1['Nombre_Completo'], p1['ID'], 'Completed']
+                # Avanzar al ganador del BYE a R2 automáticamente (esto requiere lógica adicional de recursión o guardado intermedio)
+
+        brackets_df = pd.concat([brackets_df, temp_df], ignore_index=True)
         save_brackets(brackets_df)
-        
-        # Actualizar estado de inscripciones
-        for participant in participants:
-            inscriptions_df.loc[inscriptions_df['ID'] == participant['ID'], 'Estado'] = 'Emparejado'
-        
-        save_inscriptions(inscriptions_df)
-        
-        log_event("DYNAMIC_BRACKETS_GENERATED", 
-                 f"Categoría: {category}, Participantes: {num_participants}, "
-                 f"Rondas: {len(bracket_structure['rounds'])}, "
-                 f"Byes: {bracket_structure['byes']}")
-        
         return True
-        
     except Exception as e:
-        st.error(f"Error generando brackets dinámicos: {str(e)}")
-        log_event("ERROR_GENERATE_DYNAMIC_BRACKETS", str(e))
+        st.error(f"Error: {e}")
         return False
-
-
 
 
 
@@ -2840,26 +2807,3 @@ def main():
         render_inscription_view()
     elif st.session_state.view == "BRACKET":
         render_dynamic_bracket_view()  # <-- USAR LA NUEVA FUNCIÓN
-
-# --- 20. EJECUCIÓN PRINCIPAL ---
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        st.error(f"❌ Error crítico en la aplicación: {str(e)}")
-        log_event("CRITICAL_ERROR", str(e))
-        st.info("""
-        **🛠️ Solución de problemas:**
-        1. Recarga la página
-        2. Verifica tu conexión a internet
-        3. Si el problema persiste, contacta al administrador
-        
-        **📧 Contacto:** admin@wkbchile.cl
-        """)
-        
-        # Opción para resetear la aplicación
-        if st.button("🔄 REINICIAR APLICACIÓN", type="primary"):
-            st.cache_data.clear()
-            st.cache_resource.clear()
-            st.session_state.clear()
-            st.rerun()
