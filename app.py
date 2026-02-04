@@ -1254,8 +1254,11 @@ def show_inscription_form():
                 st.session_state.inscription_step = 3
                 st.rerun()
 
+
+
+
 def show_payment_section():
-    """Muestra la sección de pago con Mercado Pago"""
+    # Muestra la sección de pago con Mercado Pago
     st.markdown("#### 💳 PAGO CON MERCADO PAGO")
     
     # Calcular total
@@ -1263,145 +1266,79 @@ def show_payment_section():
         participants_count = 1
         participants_list = [st.session_state.current_participant]
         primary_email = st.session_state.current_participant["email"]
-        description = f"Individual - {st.session_state.current_participant['nombre_completo']}"
+        description = "Individual - " + st.session_state.current_participant["nombre_completo"]
     else:
         participants_count = len(st.session_state.group_participants)
         participants_list = st.session_state.group_participants
         primary_email = st.session_state.group_participants[0]["email"] if participants_list else ""
-        description = f"Grupal - {participants_count} participantes"
+        description = "Grupal - " + str(participants_count) + " participantes"
     
     total_price = calculate_price(participants_count, st.session_state.inscription_type)
     
-    # Mostrar resumen
-    st.markdown(f"""
-    <div style='background: #1f2937; padding: 20px; border-radius: 10px; border-left: 5px solid #FDB931;'>
-        <h4 style='margin-top: 0; color: #FDB931;'>RESUMEN DE INSCRIPCIÓN</h4>
-        <p><strong>Tipo:</strong> {st.session_state.inscription_type.upper()}</p>
-        <p><strong>Participantes:</strong> {participants_count}</p>
-        <p><strong>Total a pagar:</strong> <span style='color: #FDB931; font-size: 24px;'>${total_price:,.0f} CLP</span></p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Mostrar resumen usando markdown estándar para evitar bloques complejos de HTML
+    st.info("### RESUMEN DE INSCRIPCIÓN\n**Tipo:** " + st.session_state.inscription_type.upper() + "\n\n**Participantes:** " + str(participants_count) + "\n\n**Total a pagar: $" + str(int(total_price)) + " CLP**")
     
     # Detalles de participantes
     with st.expander("📋 VER DETALLES DE PARTICIPANTES"):
         for i, p in enumerate(participants_list, 1):
-            st.markdown(f"**{i}. {p['nombre_completo']}** - {p['categoria']} - {p['dojo']}")
+            st.markdown("**" + str(i) + ". " + p["nombre_completo"] + "** - " + p["categoria"])
     
-    # Métodos de pago
-    st.markdown("---")
-    st.markdown("#### 💰 MÉTODOS DE PAGO DISPONIBLES")
-    
-    # Mostrar métodos de pago
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown("""
-        <div class="payment-method">
-            <div class="payment-icon">💳</div>
-            <div>Tarjeta de Crédito</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="payment-method">
-            <div class="payment-icon">🏦</div>
-            <div>Tarjeta de Débito</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div class="payment-method">
-            <div class="payment-icon">📱</div>
-            <div>Mercado Pago</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        st.markdown("""
-        <div class="payment-method">
-            <div class="payment-icon">💰</div>
-            <div>Efectivo</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.info("💡 **Todos los pagos son procesados de forma segura por Mercado Pago**")
-    
-    # Botón de pago con Mercado Pago
-    st.markdown("---")
-    
+    # Generación de código si no existe
     if not st.session_state.inscription_code:
-        # Generar código de inscripción único
         st.session_state.inscription_code = generate_inscription_code()
-        
-        # Guardar participantes temporalmente
         saved_ids, group_id = save_participants_temporarily(
             participants_list,
             st.session_state.inscription_type,
             st.session_state.inscription_code
         )
-        
         if not saved_ids:
-            st.error("❌ Error al guardar la inscripción. Por favor intenta nuevamente.")
+            st.error("❌ Error al guardar la inscripción.")
             return
-    
+
     # Crear preferencia de pago
     with st.spinner("🔄 Preparando pago seguro..."):
+        base_url = st.secrets.get("public_url", "https://wkbchile.streamlit.app")
         preference = create_mercadopago_preference(
             total_amount=total_price,
             description=description,
             participant_email=primary_email,
             inscription_id=st.session_state.inscription_code,
-            return_url=st.secrets.get("public_url", "https://wkb-torneo.streamlit.app")
+            return_url=base_url
         )
     
     if preference and "init_point" in preference:
-        # Mostrar botón de pago
         payment_url = preference["init_point"]
         
-        st.markdown(f""
-        <a href="{payment_url}" target="_blank">
-            <button class="mercado-pago-btn">
-                PAGAR ${total_price} CON MERCADO PAGO
-            </button>
-        </a>
-        "", unsafe_allow_html=True)
+        # Construcción del botón HTML usando concatenación de strings simples
+        btn_html = '<a href="' + payment_url + '" target="_blank">'
+        btn_html += '<button class="mercado-pago-btn">💳 PAGAR $' + str(int(total_price)) + ' CON MERCADO PAGO</button></a>'
         
-        # Mostrar ID de la preferencia para debugging
-        st.caption(f"ID de preferencia: {preference.get('id')}")
+        st.markdown(btn_html, unsafe_allow_html=True)
+        st.caption("ID: " + preference.get("id"))
         
-        # QR Code para pagos móviles
+        # QR Code
         st.markdown("---")
         st.markdown("#### 📱 PAGO CON CÓDIGO QR")
-        st.info("Escanea este código QR con la app de Mercado Pago para pagar desde tu celular")
-        
-        # Generar URL para QR
-        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={payment_url}"
+        qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + payment_url
         st.image(qr_url, caption="Escanea para pagar", width=200)
-        
     else:
-        st.error("❌ Error al crear el pago. Por favor intenta nuevamente.")
+        st.error("❌ Error al crear el pago.")
     
     # Botón para volver
     st.markdown("---")
-    if st.button("🔙 VOLVER A MODIFICAR PARTICIPANTES", 
-                use_container_width=True,
-                type="secondary"):
+    if st.button("🔙 VOLVER A MODIFICAR", use_container_width=True):
         st.session_state.inscription_step = 2
         st.rerun()
-                    
-# --- BOTÓN DE CONFIRMACIÓN DIRECTA (PARA PRUEBAS) ---
+
+    # Opciones de Desarrollador
     st.markdown("---")
-    with st.expander("🛠️ OPCIONES DE DESARROLLADOR"):
-        st.warning("Este botón confirma la inscripción inmediatamente sin cobrar.")
-        if st.button("✅ CONFIRMAR INSCRIPCIÓN DIRECTAMENTE", use_container_width=True):
+    with st.expander("🛠️ DESARROLLADOR"):
+        if st.button("✅ CONFIRMAR MANUALMENTE", use_container_width=True):
             if confirm_inscription_manually(st.session_state.inscription_code):
                 st.session_state.payment_processed = True
                 st.session_state.payment_status = "success"
-                st.success("Inscripción confirmada manualmente.")
-                time.sleep(1)
                 st.rerun()
+
 
 
 
