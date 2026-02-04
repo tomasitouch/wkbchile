@@ -2776,34 +2776,3 @@ if __name__ == "__main__":
             st.cache_resource.clear()
             st.session_state.clear()
             st.rerun()
-
-# --- 19. GESTIÓN PRINCIPAL DE LA APLICACIÓN ---
-def main():
-    """Función principal de la aplicación"""
-    
-    # Inicializar variables de sesión
-    if 'view' not in st.session_state:
-        st.session_state.view = "HOME"
-    if 'cat' not in st.session_state:
-        st.session_state.cat = None
-    if 'is_admin' not in st.session_state:
-        st.session_state.is_admin = False
-    
-    # Verificar e inicializar configuración
-    try:
-        config_df = load_config()
-        if config_df.empty:
-            with st.spinner("Inicializando sistema..."):
-                initialize_sheets()
-    except Exception as e:
-        log_event("ERROR_INITIAL_CHECK", str(e))
-        with st.spinner("Inicializando sistema por primera vez..."):
-            initialize_sheets()
-    
-    # Navegación entre vistas
-    if st.session_state.view == "HOME":
-        render_home_view()
-    elif st.session_state.view == "INSCRIPTION":
-        render_inscription_view()
-    elif st.session_state.view == "BRACKET":
-        render_dynamic_bracket_view()  # <-- USAR LA NUEVA FUNCIÓN
