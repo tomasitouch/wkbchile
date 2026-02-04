@@ -77,11 +77,11 @@ st.markdown("""
     
     .champion-box { background: radial-gradient(#FDB931, #d9a024); color: black !important; text-align: center; padding: 15px; border-radius: 8px; font-weight: bold; }
     
-    /* BOTONES VOTACION */
+    /* BOTONES */
     div.stButton > button { width: 100%; border: 1px solid #374151; background: #1f2937; color: white; font-size: 12px; }
     div.stButton > button:hover { border-color: #FDB931; color: #FDB931; }
     
-    /* PROGRESO VOTOS */
+    /* VOTOS */
     .vote-container { background: #111; padding: 10px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #333; }
     .vote-bar-bg { width: 100%; height: 6px; background: #333; border-radius: 3px; margin-top: 5px; display: flex; }
     .vote-bar-red { height: 100%; background: #ef4444; }
@@ -143,7 +143,7 @@ def load_data():
             conn.update(spreadsheet=SHEET_URL, worksheet="Config", data=pd.DataFrame([{"Status": status}]))
 
         return df_m, df_i, status
-    except: return pd.DataFrame(), pd.DataFrame(), "Error"
+    except: return pd.DataFrame(), pd.DataFrame(), "Inscripciones Abiertas"
 
 def save_reg(data):
     conn = get_connection()
@@ -165,35 +165,70 @@ def save_status(s):
 
 df_matches, df_insc, tournament_status = load_data()
 
-# --- SORTEO ---
+# --- SORTEO INTELIGENTE ---
 def generate_bracket_for_category(category):
-    players = df_insc[df_insc['Categoria'] == category].to_dict('records')
-    if len(players) < 2: return False, "Mínimo 2 inscritos"
+    # 1. Obtener inscritos
+    if df_insc.empty: return False, "No hay base de datos de inscritos."
     
+    # Filtro seguro
+    players = df_insc[df_insc['Categoria'] == category].to_dict('records')
+    
+    if len(players) < 2: return False, f"Se necesitan mínimo 2 inscritos en {category}."
+    
+    # 2. Mezclar aleatoriamente
     random.shuffle(players)
+    
+    # 3. Preparar DataFrame limpio para esta categoría
     global df_matches
+    # Eliminamos matches viejos de esta categoria para reescribirlos
     df_matches = df_matches[df_matches['Category'] != category]
     
     new_matches = []
-    # Cuartos
-    for i, mid in enumerate(['Q1','Q2','Q3','Q4']):
-        idx1, idx2 = i*2, i*2+1
-        p1 = players[idx1] if idx1 < len(players) else None
-        p2 = players[idx2] if idx2 < len(players) else None
+    
+    # 4. Asignar a Cuartos de Final (Q1-Q4)
+    # Rellenamos hasta 8 espacios con None si faltan jugadores
+    while len(players) < 8:
+        players.append(None)
         
+    match_ids = ['Q1', 'Q2', 'Q3', 'Q4']
+    
+    for i, mid in enumerate(match_ids):
+        # Tomar pares: 0y1, 2y3, 4y5, 6y7
+        idx_p1 = i * 2
+        idx_p2 = i * 2 + 1
+        
+        p1 = players[idx_p1]
+        p2 = players[idx_p2]
+        
+        # Crear fila del Match
         new_matches.append({
-            "Category": category, "Match_ID": mid,
-            "P1_Name": p1.get('Nombre', '') if p1 else "", "P1_Dojo": p1.get('Dojo', '') if p1 else "", "P1_Foto": p1.get('Foto_Base64', '') if p1 else "", "P1_Votes": 0,
-            "P2_Name": p2.get('Nombre', '') if p2 else "", "P2_Dojo": p2.get('Dojo', '') if p2 else "", "P2_Foto": p2.get('Foto_Base64', '') if p2 else "", "P2_Votes": 0,
+            "Category": category, 
+            "Match_ID": mid,
+            "P1_Name": p1.get('Nombre', '') if p1 else "", 
+            "P1_Dojo": p1.get('Dojo', '') if p1 else "", 
+            "P1_Foto": p1.get('Foto_Base64', '') if p1 else "", 
+            "P1_Votes": 0,
+            "P2_Name": p2.get('Nombre', '') if p2 else "", 
+            "P2_Dojo": p2.get('Dojo', '') if p2 else "", 
+            "P2_Foto": p2.get('Foto_Base64', '') if p2 else "",
+            "P2_Votes": 0, 
+            "Winner": None, # Ganador vacío al inicio
+            "Live": False
+        })
+        
+    # 5. Crear espacios vacíos para Semis y Final (se llenarán solos al ganar)
+    for m in ['S1', 'S2', 'F1']:
+        new_matches.append({
+            "Category": category, "Match_ID": m, 
+            "P1_Name": "", "P1_Dojo": "", "P1_Foto": "", "P1_Votes": 0, 
+            "P2_Name": "", "P2_Dojo": "", "P2_Foto": "", "P2_Votes": 0, 
             "Winner": None, "Live": False
         })
-    # Semis/Final
-    for m in ['S1', 'S2', 'F1']:
-        new_matches.append({"Category": category, "Match_ID": m, "P1_Name": "", "P1_Dojo": "", "P1_Foto": "", "P1_Votes": 0, "P2_Name": "", "P2_Dojo": "", "P2_Foto": "", "P2_Votes": 0, "Winner": None, "Live": False})
         
+    # 6. Guardar todo
     df_final = pd.concat([df_matches, pd.DataFrame(new_matches)], ignore_index=True)
     save_matches(df_final)
-    return True, "Sorteo OK"
+    return True, f"¡Sorteo realizado! {len([p for p in players if p])} luchadores asignados."
 
 # --- 4. BARRA LATERAL ---
 with st.sidebar:
@@ -219,7 +254,7 @@ def go(view, cat=None):
 # HEADER
 st.markdown(f"""
 <div class="header-container">
-    <div><h2 style="margin:0;font-size:22px;">WKB CHILE</h2><small style="color:#FDB931;">OFFICIAL HUB</small></div>
+    <div><h2 style="margin:0;font-size:22px;">WKB CHILE</h2><small style="color:#FDB931;">OFFICIAL HUB | {tournament_status}</small></div>
     <div style="font-size:12px;background:#333;padding:5px 10px;border-radius:4px;">{tournament_status}</div>
 </div>""", unsafe_allow_html=True)
 
@@ -272,103 +307,92 @@ elif st.session_state.view == "REGISTER":
 # BRACKET
 elif st.session_state.view == "BRACKET":
     cat = st.session_state.cat
-    c1,c2=st.columns([1,4])
-    with c1: 
-        if st.button("⬅"): go("HOME")
-    with c2: st.markdown(f"### {cat}")
+    render_header()
+    if st.button("⬅ INICIO"): go("HOME")
+    st.markdown(f"### {cat}")
+    
+    matches_cat = df_matches[df_matches['Category'] == cat]
+    bracket_active = not matches_cat.empty
 
-    # Filtrar datos
-    cat_insc = df_insc[df_insc['Categoria'] == cat]
-    cat_match = df_matches[df_matches['Category'] == cat]
-    has_bracket = not cat_match.empty
-
-    # Admin en Bracket
+    # ADMIN
     if st.session_state.get('is_admin'):
         with st.sidebar:
             st.markdown("---")
+            # BOTÓN CRÍTICO: GENERAR LLAVES
             if st.button("🎲 GENERAR SORTEO", type="primary"):
                 s, m = generate_bracket_for_category(cat)
                 if s: st.success(m); time.sleep(1); st.rerun()
                 else: st.error(m)
             
-            if has_bracket:
+            # Edición Manual
+            if bracket_active:
+                st.markdown("---")
                 mid = st.selectbox("Editar", ['Q1','Q2','Q3','Q4','S1','S2','F1'])
-                r = cat_match[cat_match['Match_ID']==mid].iloc[0]
+                r = matches_cat[matches_cat['Match_ID']==mid].iloc[0]
                 with st.form("ed"):
                     win = st.selectbox("Ganador", ["", r['P1_Name'], r['P2_Name']])
                     live = st.checkbox("Live", r['Live'])
                     if st.form_submit_button("Guardar"):
                         idx = df_matches[(df_matches['Category']==cat)&(df_matches['Match_ID']==mid)].index[0]
                         df_matches.at[idx,'Winner']=win; df_matches.at[idx,'Live']=live
-                        # Avance
+                        # Lógica de Avance
                         if win:
-                            dest, slot = "", ""
-                            if 'Q' in mid: dest, slot = ('S1','P1') if mid in ['Q1','Q2'] else ('S2','P1') if mid=='Q3' else ('S2','P2')
-                            elif 'S' in mid: dest, slot = 'F1', ('P1' if mid=='S1' else 'P2')
-                            
+                            dest, slot = ('S1','P1') if mid=='Q1' else ('S1','P2') if mid=='Q2' else ('S2','P1') if mid=='Q3' else ('S2','P2') if mid=='Q4' else ('F1','P1') if mid=='S1' else ('F1','P2') if mid=='S2' else (None,None)
                             if dest:
-                                t_idx = df_matches[(df_matches['Category']==cat)&(df_matches['Match_ID']==dest)].index
-                                if not t_idx.empty:
-                                    src = 'P1' if win==r['P1_Name'] else 'P2'
-                                    df_matches.at[t_idx[0], f'{slot}_Name'] = win
-                                    df_matches.at[t_idx[0], f'{slot}_Dojo'] = r[f'{src}_Dojo']
-                                    df_matches.at[t_idx[0], f'{slot}_Foto'] = r[f'{src}_Foto']
+                                tidx = df_matches[(df_matches['Category']==cat)&(df_matches['Match_ID']==dest)].index
+                                if not tidx.empty:
+                                    src_p = 'P1' if win==r['P1_Name'] else 'P2'
+                                    df_matches.at[tidx[0],f'{slot}_Name'] = win
+                                    df_matches.at[tidx[0],f'{slot}_Dojo'] = r[f'{src_p}_Dojo']
+                                    df_matches.at[tidx[0],f'{slot}_Foto'] = r[f'{src_p}_Foto']
                         save_matches(df_matches); st.rerun()
 
-    # VISTA PÚBLICA
-    if tournament_status != "Torneo Activo" and not has_bracket:
+    # VISUALIZACIÓN
+    if tournament_status != "Torneo Activo" and not bracket_active:
         # LISTA
-        if cat_insc.empty: st.info("Sin inscritos")
+        st.info("📋 Inscritos (Llaves pendientes)")
+        insc = df_insc[df_insc['Categoria'] == cat]
+        if insc.empty: st.warning("Sin inscritos")
         else:
-            for _, p in cat_insc.iterrows():
+            for _, p in insc.iterrows():
+                nombre = p.get('Nombre', p.get('Nombre_Completo', 'Participante'))
                 img = f"data:image/jpeg;base64,{p.get('Foto_Base64','')}" if p.get('Foto_Base64') else "https://via.placeholder.com/50"
-                st.markdown(f"""<div class="list-card"><img src="{img}" class="list-avatar"><div><div style="font-weight:bold;">{p.get('Nombre','')}</div><div style="color:#aaa;font-size:12px;">🥋 {p.get('Dojo','')}</div></div></div>""", unsafe_allow_html=True)
-    elif has_bracket:
+                st.markdown(f"""<div class="list-card"><img src="{img}" class="list-avatar"><div><div style="font-weight:bold;">{nombre}</div><div style="color:#aaa;font-size:12px;">🥋 {p.get('Dojo','')}</div></div></div>""", unsafe_allow_html=True)
+    elif bracket_active:
         # BRACKET
-        cat_df = cat_match.set_index('Match_ID')
+        cat_df = matches_cat.set_index('Match_ID')
         def get_v(m,c): return cat_df.at[m,c] if m in cat_df.index else ""
         def card(mid):
             p1, p2 = get_v(mid,'P1_Name'), get_v(mid,'P2_Name')
-            i1 = f"data:image/jpeg;base64,{get_v(mid,'P1_Foto')}" if get_v(mid,'P1_Foto') else ""
-            i2 = f"data:image/jpeg;base64,{get_v(mid,'P2_Foto')}" if get_v(mid,'P2_Foto') else ""
+            img1, img2 = get_v(mid,'P1_Foto'), get_v(mid,'P2_Foto')
+            src1 = f"data:image/jpeg;base64,{img1}" if img1 else ""
+            src2 = f"data:image/jpeg;base64,{img2}" if img2 else ""
             live = '<span class="live-dot"></span>' if get_v(mid,'Live') else ''
-            return f"""<div class="player-box border-red">{f'<img src="{i1}" class="img-mini">' if i1 else ''}<div class="p-data"><div class="p-name">{live} {p1 if p1 else "..."}</div><div class="p-dojo">{get_v(mid,'P1_Dojo')}</div></div></div><div class="player-box border-white">{f'<img src="{i2}" class="img-mini">' if i2 else ''}<div class="p-data"><div class="p-name">{p2 if p2 else "..."}</div><div class="p-dojo">{get_v(mid,'P2_Dojo')}</div></div><div class="line-r"></div></div>"""
+            return f"""<div class="player-box border-red">{f'<img src="{src1}" class="img-mini">' if src1 else ''}<div class="p-data"><div class="p-name">{live} {p1 if p1 else "..."}</div><div class="p-dojo">{get_v(mid,'P1_Dojo')}</div></div></div><div class="player-box border-white">{f'<img src="{src2}" class="img-mini">' if src2 else ''}<div class="p-data"><div class="p-name">{p2 if p2 else "..."}</div><div class="p-dojo">{get_v(mid,'P2_Dojo')}</div></div><div class="line-r"></div></div>"""
 
         st.html(f"""<div class="bracket-wrapper"><div class="bracket-container"><div class="round"><div style="text-align:center;font-size:10px">CUARTOS</div>{card('Q1')}<div style="height:20px"></div>{card('Q2')}<div style="height:20px"></div>{card('Q3')}<div style="height:20px"></div>{card('Q4')}</div><div class="round"><div style="text-align:center;font-size:10px">SEMIS</div><div style="height:50px"></div>{card('S1')}<div style="height:100px"></div>{card('S2')}</div><div class="round"><div style="text-align:center;font-size:10px">FINAL</div><div style="height:120px"></div>{card('F1')}</div><div class="round"><div style="text-align:center;font-size:10px">CAMPEÓN</div><div style="height:120px"></div><div class="champion-box">{get_v('F1','Winner') if get_v('F1','Winner') else "?"} 🏆</div></div></div></div>""")
-
-        # Votación (Solo Torneo Activo)
+        
+        # Votación (Solo si Activo)
         if tournament_status == "Torneo Activo":
-            st.write("---")
-            st.caption("🗳️ Vota por tu favorito en esta ronda")
-            
-            def vote(mid, col):
-                if not st.session_state.limiter.check("user"): st.toast("⏳ Espera..."); return
-                vote_key = f"{cat}_{mid}"
-                if vote_key in st.session_state.voted_matches: st.toast("Ya votaste"); return
-                
-                idx = df_matches[(df_matches['Category']==cat)&(df_matches['Match_ID']==mid)].index[0]
-                df_matches.at[idx, col] = int(df_matches.at[idx, col]) + 1
-                save_matches(df_matches)
-                st.session_state.voted_matches.add(vote_key)
-                st.toast("Voto Enviado!")
-
             cols = st.columns(4)
             for i, m in enumerate(['Q1','Q2','Q3','Q4','S1','S2','F1']):
                 p1, p2 = get_v(m,'P1_Name'), get_v(m,'P2_Name')
-                # Solo mostrar si hay luchadores y no hay ganador
                 if p1 and p2 and not get_v(m,'Winner'):
                     v1, v2 = int(get_v(m,'P1_Votes')), int(get_v(m,'P2_Votes'))
-                    total = v1+v2 if (v1+v2)>0 else 1
-                    
+                    tot = v1+v2 if v1+v2 > 0 else 1
                     with cols[i%4]:
                         st.markdown(f"**{m}**")
-                        # Barra de progreso visual
-                        st.markdown(f"""<div class="vote-container"><div style="display:flex;justify-content:space-between;font-size:10px"><span>🔴 {int(v1/total*100)}%</span><span>⚪ {int(v2/total*100)}%</span></div><div class="vote-bar-bg"><div class="vote-bar-red" style="width:{v1/total*100}%"></div><div class="vote-bar-white" style="width:{v2/total*100}%"></div></div></div>""", unsafe_allow_html=True)
+                        # Barra Progreso
+                        st.markdown(f"""<div class="vote-container"><div style="display:flex;justify-content:space-between;font-size:10px"><span>🔴 {int(v1/tot*100)}%</span><span>⚪ {int(v2/tot*100)}%</span></div><div class="vote-bar-bg"><div class="vote-bar-red" style="width:{v1/tot*100}%"></div><div class="vote-bar-white" style="width:{v2/tot*100}%"></div></div></div>""", unsafe_allow_html=True)
                         
-                        c_a, c_b = st.columns(2)
-                        # Botones con nombre truncado
-                        if c_a.button(f"🔴 {p1[:10]}..", key=f"r{m}"): vote(m, 'P1_Votes')
-                        if c_b.button(f"⚪ {p2[:10]}..", key=f"w{m}"): vote(m, 'P2_Votes')
+                        ca, cb = st.columns(2)
+                        def vote(match, col):
+                            if not st.session_state.limiter.check("user"): st.toast("⏳ Espera..."); return
+                            idx = df_matches[(df_matches['Category']==cat)&(df_matches['Match_ID']==match)].index[0]
+                            df_matches.at[idx, col] = int(df_matches.at[idx, col]) + 1
+                            save_matches(df_matches); st.toast("Voto OK")
+                        
+                        if ca.button(f"🔴 {p1[:8]}..", key=f"r{m}"): vote(m, 'P1_Votes')
+                        if cb.button(f"⚪ {p2[:8]}..", key=f"w{m}"): vote(m, 'P2_Votes')
 
-    if not st.session_state.get('is_admin'):
-        st.html("<script>setTimeout(function(){window.location.reload();}, 30000);</script>")
+    if not st.session_state.get('is_admin'): st.html("<script>setTimeout(function(){window.location.reload();}, 30000);</script>")
