@@ -5,3 +5,4 @@ mercadopago
 Pillow
 numpy
 scipy
+math
