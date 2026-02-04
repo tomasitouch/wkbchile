@@ -19,7 +19,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Meta tags para responsive en móviles
 st.markdown("""
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 """, unsafe_allow_html=True)
@@ -29,13 +28,12 @@ st.markdown("""
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1hFlkSSPWqoQDSjkiPV5uaIIx-iHjoihLg2yokDJm-4E/edit?gid=0#gid=0"
 
 # --- 3. SEGURIDAD ---
-# La contraseña es: admin123
-ADMIN_TOKEN_HASH = "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9"
+ADMIN_TOKEN_HASH = "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9" # pass: admin123
 
 def check_admin(password):
     return hashlib.sha256(password.encode()).hexdigest() == ADMIN_TOKEN_HASH
 
-# --- 4. ESTILOS CSS (Mantenemos el diseño PRO) ---
+# --- 4. ESTILOS CSS ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700&family=Inter:wght@300;400;600;700&display=swap');
@@ -99,6 +97,10 @@ st.markdown("""
         padding: 20px; text-align: center; font-weight: bold; border-radius: 10px;
         font-size: 18px;
     }
+    
+    /* Switch Style custom */
+    .status-open { color: #4ade80; font-weight: bold; }
+    .status-closed { color: #ef4444; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,35 +113,27 @@ CATEGORIES_CONFIG = {
 }
 ALL_CATS = [f"{g} | {s}" for g, s in CATEGORIES_CONFIG.items() for s in s]
 
-# Definir conexión
 @st.cache_resource
 def get_connection():
     return st.connection("gsheets", type=GSheetsConnection)
 
-# Cargar Datos (Brackets)
 @st.cache_data(ttl=10)
 def load_data():
     conn = get_connection()
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Hoja1")
-        # Si está vacío o nueva hoja, inicializar
-        if df.empty or "P1_Votes" not in df.columns:
-            return get_initial_df()
+        if df.empty or "P1_Votes" not in df.columns: return get_initial_df()
         return df
-    except:
-        return get_initial_df()
+    except: return get_initial_df()
 
-# Cargar Inscripciones
 @st.cache_data(ttl=10)
 def load_inscriptions():
     conn = get_connection()
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Inscripciones")
-        if df.empty:
-            return get_initial_inscriptions_df()
+        if df.empty: return get_initial_inscriptions_df()
         return df
-    except:
-        return get_initial_inscriptions_df()
+    except: return get_initial_inscriptions_df()
 
 def get_initial_df():
     data = []
@@ -178,12 +172,23 @@ def image_to_base64(image):
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-# --- 6. LÓGICA DE NEGOCIO (SORTEO Y RESET) ---
+# --- 6. LÓGICA DE NEGOCIO (SORTEO, RESET, OPEN/CLOSE) ---
+
+def open_category_registration(category):
+    """
+    Borra las llaves de la categoría para reabrir inscripciones.
+    """
+    global main_df
+    # Identificar filas de esta categoria
+    idx = main_df[main_df['Category'] == category].index
+    # Borrar datos de combate (limpiar)
+    main_df.loc[idx, ['P1_Name','P1_Dojo','P1_Votes','P2_Name','P2_Dojo','P2_Votes','Winner','Live']] = ["","",0,"","",0,None,False]
+    save_data(main_df)
+    return True
 
 def generate_random_bracket(category):
     """
-    Genera llaves aleatorias para una categoría.
-    Maneja BYES si el número de participantes no es potencia de 2.
+    Cierra inscripciones y genera llaves.
     """
     global main_df, inscriptions_df
     
@@ -193,72 +198,50 @@ def generate_random_bracket(category):
     
     num_p = len(candidates)
     if num_p < 2:
-        return False, "Se necesitan mínimo 2 participantes."
+        return False, "Se necesitan mínimo 2 participantes para cerrar la categoría."
     
     # 2. Mezclar aleatoriamente
     participants_list = candidates.to_dict('records')
     random.shuffle(participants_list)
     
-    # 3. Calcular tamaño del cuadro (Bracket Size)
-    # Potencia de 2 más cercana hacia arriba (ej: 5 inscritos -> bracket de 8)
+    # 3. Calcular tamaño del cuadro
     bracket_size = 2 ** math.ceil(math.log2(num_p))
-    if bracket_size > 8: bracket_size = 8 # Limitado a 8 por el diseño visual actual
+    if bracket_size > 8: bracket_size = 8 
     if bracket_size < 2: bracket_size = 2
     
-    # Número de "Byes" (Gente que pasa directo)
     num_byes = bracket_size - num_p
     
-    # 4. Limpiar datos previos de esa categoría en Hoja1
+    # 4. Limpiar datos previos (Reset interno)
     cat_idx = main_df[main_df['Category'] == category].index
     main_df.loc[cat_idx, ['P1_Name','P1_Dojo','P1_Votes','P2_Name','P2_Dojo','P2_Votes','Winner']] = ["","",0,"","",0,None]
     
-    # 5. Definir qué matches llenar
+    # 5. Llenar matches
     matches_to_fill = []
     if bracket_size == 8: matches_to_fill = ['Q1', 'Q2', 'Q3', 'Q4']
     elif bracket_size == 4: matches_to_fill = ['S1', 'S2']
     elif bracket_size == 2: matches_to_fill = ['F1']
     
-    # 6. Asignar peleas
-    # Estrategia: Llenar P1 con participantes reales. Llenar P2 con participantes reales o BYE.
-    # Los BYEs se asignan aleatoriamente debido al shuffle inicial, pero técnicamente
-    # en un torneo se ponen al final. Aquí, simplemente llenamos slots.
-    
     p_idx = 0
-    
     for m_id in matches_to_fill:
         if p_idx < len(participants_list):
-            # Jugador 1 (Rojo)
             p1 = participants_list[p_idx]
             p_idx += 1
             
-            # Jugador 2 (Blanco) o BYE
             p2_name = "BYE"
             p2_dojo = "-"
             
-            # Si todavía hay gente y no necesitamos gastar un BYE obligatorio en este slot específico
-            # (Simplificación: Si hay gente, ponla. Si no, Bye).
-            # Para distribuir los Byes correctamente: Total espacios restantes vs Gente restante
-            slots_remaining = (len(matches_to_fill) * 2) - (matches_to_fill.index(m_id) * 2) - 1
-            people_remaining = len(participants_list) - p_idx
-            
-            # Si gente restante < slots restantes, este podría ser un Bye.
-            # En sistema aleatorio puro:
-            if p_idx < len(participants_list):
-                # ¿Debemos forzar un Bye? Si num_byes > 0
-                # En un sorteo de karate, los Byes se distribuyen. 
-                # Simplemente: Si quedan Byes, asignamos uno a este match para que P1 pase.
-                if num_byes > 0:
-                    # Asignamos Bye
-                    num_byes -= 1
-                    # P2 queda como BYE
-                else:
-                    # Asignamos oponente real
+            # Asignar BYE si corresponde (Simplificado: si faltan oponentes para llenar slots)
+            # En este modelo simple, si quedan BYEs, asignamos al oponente como BYE
+            if num_byes > 0:
+                num_byes -= 1
+            else:
+                if p_idx < len(participants_list):
                     p2 = participants_list[p_idx]
                     p2_name = p2['Nombre_Completo']
                     p2_dojo = p2['Dojo']
                     p_idx += 1
             
-            # Guardar en DataFrame
+            # Guardar
             idx = main_df[(main_df['Category']==category) & (main_df['Match_ID']==m_id)].index
             if not idx.empty:
                 i = idx[0]
@@ -267,7 +250,7 @@ def generate_random_bracket(category):
                 main_df.at[i, 'P2_Name'] = p2_name
                 main_df.at[i, 'P2_Dojo'] = p2_dojo
                 
-                # Si es BYE, P1 gana automáticamente y avanza
+                # Avanzar automático si es BYE
                 if p2_name == "BYE":
                     main_df.at[i, 'Winner'] = p1['Nombre_Completo']
                     advance_winner(category, m_id, p1['Nombre_Completo'], p1['Dojo'])
@@ -276,7 +259,6 @@ def generate_random_bracket(category):
     return True, f"Sorteo realizado para {num_p} atletas (Top {bracket_size})."
 
 def advance_winner(category, current_match, winner_name, winner_dojo):
-    """Mueve al ganador a la siguiente ronda automáticamente"""
     target_match = None
     target_pos = None
     
@@ -294,17 +276,13 @@ def advance_winner(category, current_match, winner_name, winner_dojo):
             main_df.at[idx[0], f'{target_pos}_Dojo'] = winner_dojo
 
 def reset_entire_system():
-    """BORRADO TOTAL"""
     try:
-        # 1. Reset Hoja1
         empty_brackets = get_initial_df()
         save_data(empty_brackets)
-        # 2. Reset Inscripciones
         empty_insc = get_initial_inscriptions_df()
         save_inscriptions(empty_insc)
         return True
-    except Exception as e:
-        return False
+    except: return False
 
 # --- 7. CARGA DE ESTADO ---
 if 'view' not in st.session_state: st.session_state.view = "HOME"
@@ -336,7 +314,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# SIDEBAR (ADMIN)
+# SIDEBAR (ADMIN GLOBAL)
 with st.sidebar:
     st.title("🔧 Panel Admin")
     
@@ -370,8 +348,7 @@ if st.session_state.view == "HOME":
     tab1, tab2 = st.tabs(["🏆 CATEGORÍAS & BRACKETS", "📝 INSCRIPCIÓN DE ATLETAS"])
     
     with tab1:
-        st.markdown("### SELECCIONA UNA CATEGORÍA PARA VER LLAVES")
-        st.info("Selecciona una categoría para ver los combates, votar o (si eres admin) realizar el sorteo.")
+        st.markdown("### SELECCIONA UNA CATEGORÍA")
         
         for group, cats in CATEGORIES_CONFIG.items():
             with st.expander(group, expanded=True):
@@ -381,7 +358,12 @@ if st.session_state.view == "HOME":
                     # Contar inscritos
                     n_insc = len(inscriptions_df[inscriptions_df['Categoria'] == full_cat])
                     
-                    if cols[i%3].button(f"{c} ({n_insc})", key=full_cat, use_container_width=True):
+                    # Chequear si está cerrada (bracket generado)
+                    cat_data = main_df[main_df['Category'] == full_cat]
+                    is_active = any(cat_data['P1_Name'] != "")
+                    status_icon = "🔒" if is_active else "🔓"
+                    
+                    if cols[i%3].button(f"{status_icon} {c} ({n_insc})", key=full_cat, use_container_width=True):
                         go("BRACKET", full_cat)
 
     with tab2:
@@ -407,16 +389,14 @@ if st.session_state.view == "HOME":
             submitted = st.form_submit_button("✅ INSCRIBIRSE")
             
             if submitted:
-                # Validar si la categoría ya comenzó (tiene brackets generados)
+                # Validar si la categoría ya comenzó
                 cat_data = main_df[main_df['Category'] == categoria]
                 has_started = any(cat_data['P1_Name'] != "")
                 
                 if has_started:
-                    st.error("⛔ Las inscripciones para esta categoría están CERRADAS porque el torneo ya comenzó.")
+                    st.error("⛔ Las inscripciones para esta categoría están CERRADAS (Llaves generadas).")
                 elif nombre and dojo and categoria:
-                    # Guardar
                     foto_str = image_to_base64(Image.open(foto)) if foto else ""
-                    
                     import uuid
                     pid = str(uuid.uuid4())[:8]
                     
@@ -442,63 +422,62 @@ elif st.session_state.view == "BRACKET":
     cat = st.session_state.cat
     cat_df = main_df[main_df['Category'] == cat].set_index('Match_ID')
     
-    # Header de la vista
     c1, c2 = st.columns([1, 5])
     if c1.button("⬅️ VOLVER"): go("HOME")
     c2.markdown(f"## {cat}")
     
+    # Determinar si el torneo está iniciado en esta categoría
+    has_started = any(cat_df['P1_Name'] != "")
+    
     # --- ZONA ADMIN DE CATEGORÍA ---
     if st.session_state.is_admin:
         with st.expander("🛠️ GESTIÓN DE CATEGORÍA (ADMIN)", expanded=True):
-            col_a, col_b = st.columns(2)
             
-            with col_a:
-                st.write("**Estado:**")
-                has_started = any(cat_df['P1_Name'] != "")
-                if has_started:
-                    st.success("🟢 TORNEO EN CURSO")
-                else:
-                    st.warning("🟡 ESPERANDO CIERRE DE INSCRIPCIONES")
-                
-                inscritos = inscriptions_df[inscriptions_df['Categoria'] == cat]
-                st.metric("Inscritos", len(inscritos))
+            # SWITCH DE ESTADO
+            st.markdown("#### ⚙️ CONTROL DE INSCRIPCIONES")
             
-            with col_b:
-                if not has_started:
-                    if st.button("🔒 CERRAR INSCRIPCIONES Y SORTEAR LLAVES", type="primary"):
-                        success, msg = generate_random_bracket(cat)
-                        if success:
-                            st.success(msg)
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                else:
-                    if st.button("♻️ RE-SORTEAR (Borrará resultados actuales)"):
-                        generate_random_bracket(cat)
+            if has_started:
+                st.markdown("Estado actual: <span class='status-closed'>🔴 CERRADO (Combates Activos)</span>", unsafe_allow_html=True)
+                st.warning("Para abrir inscripciones, debes borrar las llaves actuales.")
+                if st.button("🔓 ABRIR INSCRIPCIONES (Borrar Llaves)", type="secondary", use_container_width=True):
+                    if open_category_registration(cat):
+                        st.success("Llaves borradas. Inscripciones abiertas.")
+                        time.sleep(1)
                         st.rerun()
+            else:
+                st.markdown("Estado actual: <span class='status-open'>🟢 ABIERTO (Inscripciones Activas)</span>", unsafe_allow_html=True)
+                inscritos = inscriptions_df[inscriptions_df['Categoria'] == cat]
+                st.info(f"Hay {len(inscritos)} atletas inscritos esperando sorteo.")
+                
+                if st.button("🔒 CERRAR INSCRIPCIONES Y SORTEAR", type="primary", use_container_width=True):
+                    success, msg = generate_random_bracket(cat)
+                    if success:
+                        st.success(msg)
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error(msg)
             
             # Edición Manual
-            st.markdown("---")
-            st.caption("Modificar Resultado Manualmente")
-            match_id = st.selectbox("Seleccionar Pelea", ['Q1','Q2','Q3','Q4','S1','S2','F1'])
-            winner_name = st.text_input("Nombre Ganador (Debe ser exacto)")
-            if st.button("🏆 Declarar Ganador Manual"):
-                # Buscar fila
-                idx = main_df[(main_df['Category'] == cat) & (main_df['Match_ID'] == match_id)].index
-                if not idx.empty and winner_name:
-                    main_df.at[idx[0], 'Winner'] = winner_name
-                    # Buscar dojo del ganador
-                    p1n = main_df.at[idx[0], 'P1_Name']
-                    p1d = main_df.at[idx[0], 'P1_Dojo']
-                    p2n = main_df.at[idx[0], 'P2_Name']
-                    p2d = main_df.at[idx[0], 'P2_Dojo']
-                    
-                    w_dojo = p1d if winner_name == p1n else p2d
-                    advance_winner(cat, match_id, winner_name, w_dojo)
-                    save_data(main_df)
-                    st.success("Guardado")
-                    st.rerun()
+            if has_started:
+                st.markdown("---")
+                st.caption("Modificar Resultado Manualmente")
+                c_sel, c_name, c_btn = st.columns([2,2,1])
+                match_id = c_sel.selectbox("Pelea", ['Q1','Q2','Q3','Q4','S1','S2','F1'])
+                winner_name = c_name.text_input("Ganador Exacto")
+                if c_btn.button("🏆 Guardar"):
+                    idx = main_df[(main_df['Category'] == cat) & (main_df['Match_ID'] == match_id)].index
+                    if not idx.empty and winner_name:
+                        main_df.at[idx[0], 'Winner'] = winner_name
+                        # Mover ganador
+                        p1n = main_df.at[idx[0], 'P1_Name']
+                        p1d = main_df.at[idx[0], 'P1_Dojo']
+                        p2n = main_df.at[idx[0], 'P2_Name']
+                        p2d = main_df.at[idx[0], 'P2_Dojo']
+                        w_dojo = p1d if winner_name == p1n else p2d
+                        advance_winner(cat, match_id, winner_name, w_dojo)
+                        save_data(main_df)
+                        st.rerun()
 
     # --- VISUALIZACIÓN DE LLAVES ---
     def get_val(mid, col):
@@ -509,12 +488,9 @@ elif st.session_state.view == "BRACKET":
 
     # Determinar qué rondas mostrar
     show_q = any(get_val(m, 'P1_Name') != "" for m in ['Q1','Q2','Q3','Q4'])
-    show_s = any(get_val(m, 'P1_Name') != "" for m in ['S1','S2'])
     
-    # Si no ha empezado
-    if not show_q and not show_s and get_val('F1', 'P1_Name') == "":
+    if not has_started:
         st.info("⚠️ Las llaves aún no han sido sorteadas. El administrador debe cerrar las inscripciones.")
-        # Mostrar lista de inscritos
         st.subheader("Atletas Inscritos:")
         inscritos = inscriptions_df[inscriptions_df['Categoria'] == cat]
         if not inscritos.empty:
@@ -528,7 +504,6 @@ elif st.session_state.view == "BRACKET":
         html_content = '<div class="bracket-container"><div class="rounds-wrapper">'
         
         def render_match_html(p1, d1, p2, d2, win):
-            # Clases para color
             c1 = "border-red"
             c2 = "border-white"
             return f"""
@@ -544,7 +519,7 @@ elif st.session_state.view == "BRACKET":
             </div>
             """
 
-        # CUARTOS (Si existen)
+        # CUARTOS
         if show_q:
             html_content += '<div class="round"><div class="round-title">CUARTOS</div>'
             for m in ['Q1', 'Q2', 'Q3', 'Q4']:
@@ -556,7 +531,6 @@ elif st.session_state.view == "BRACKET":
 
         # SEMIS
         html_content += '<div class="round"><div class="round-title">SEMIFINALES</div>'
-        # Espaciado para centrar si hay cuartos
         spacer = 'style="justify-content: space-around; height: 100%; display: flex; flex-direction: column;"'
         html_content += f'<div {spacer}>'
         for m in ['S1', 'S2']:
@@ -600,7 +574,6 @@ elif st.session_state.view == "BRACKET":
             p1 = get_val(m, 'P1_Name')
             p2 = get_val(m, 'P2_Name')
             
-            # Solo mostrar botón si hay pelea definida y no es BYE
             if p1 and p2 and p2 != "BYE" and p1 != "BYE":
                 with cols[i % 4]:
                     st.markdown(f"**{m}**")
@@ -616,7 +589,6 @@ elif st.session_state.view == "BRACKET":
                         save_data(main_df)
                         st.toast(f"Voto para {p2}")
                     
-                    # Mostrar Barra
                     v1 = int(get_val(m, 'P1_Votes') or 0)
                     v2 = int(get_val(m, 'P2_Votes') or 0)
                     tot = v1 + v2
