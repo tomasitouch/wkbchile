@@ -533,7 +533,7 @@ def initialize_sheets():
             ["tournament_stage", "inscription", "Etapa del torneo: inscription o competition"],
             ["registration_open", "true", "Si las inscripciones están abiertas"],
             ["tournament_name", "WKB Chile 2024", "Nombre del torneo"],
-            ["inscription_price", "50000", "Precio de inscripción individual en CLP"],
+            ["inscription_price", "5", "Precio de inscripción individual en CLP"],
             ["group_discount_3", "0.9", "Descuento para 3 personas (10%)"],
             ["group_discount_5", "0.8", "Descuento para 5 personas (20%)"],
             ["mp_public_key", MP_PUBLIC_KEY, "Public key de Mercado Pago"],
