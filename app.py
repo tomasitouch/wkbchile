@@ -760,7 +760,7 @@ def create_mercadopago_preference(total_amount, description, participant_email, 
             return None
         
         # URL de notificación (webhook)
-        base_url = st.secrets.get("public_url", "https://wkb-torneo.streamlit.app")
+        base_url = st.secrets.get("public_url", "https://wkbchile-br5ucwq5ptkox2fnxasjyp.streamlit.app/")
         notification_url = f"{base_url}/webhook"
         
         # Crear preferencia de pago
