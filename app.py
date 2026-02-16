@@ -10,6 +10,8 @@ import time
 from datetime import datetime
 import re
 import numpy as np
+import mercadopago
+import uuid
 
 # === CONFIGURACIÓN DE PÁGINA ===
 st.set_page_config(
@@ -18,6 +20,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# === CONFIGURACIÓN MERCADO PAGO ===
+# Usar st.secrets para las credenciales (más seguro)
+MP_ACCESS_TOKEN = st.secrets["mercadopago"]["access_token"] if "mercadopago" in st.secrets else "TEST-788682177400179-021617-ff69935464f7d4fd77ad130c71ce3b30-1459379017"
+MP_PUBLIC_KEY = st.secrets["mercadopago"]["public_key"] if "mercadopago" in st.secrets else "TEST-35348a6a-46c2-4baa-9c50-88e806f56f47"
+
+# Inicializar SDK
+sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
 
 # === CONSTANTES ===
 LOGO_URL = "https://www.worldkyokushinbudokai.com/assets/custom/img/logo.png"
@@ -44,6 +54,10 @@ def generar_id(nombre, email):
 def generar_id_grupal():
     texto = f"GRUPO_{datetime.now()}"
     return hashlib.md5(texto.encode()).hexdigest()[:8].upper()
+
+def generar_referencia_pago():
+    """Genera una referencia única para el pago"""
+    return f"WKB-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
 
 def validar_email(email):
     patron = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -73,11 +87,11 @@ def leer_inscripciones():
         df = conn.read(worksheet="Inscripciones", ttl=0)
         df = df.fillna("")
         if df.empty:
-            return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Telefono", "Edad", "Dojo", "Pais", "Categoria", "Estado", "Metodo", "Grupo_ID"])
+            return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Telefono", "Edad", "Dojo", "Pais", "Categoria", "Estado", "Metodo", "Grupo_ID", "Pago_ID", "Pago_Estado"])
         return df
     except Exception as e:
         st.error(f"Error leyendo inscripciones: {e}")
-        return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Telefono", "Edad", "Dojo", "Pais", "Categoria", "Estado", "Metodo", "Grupo_ID"])
+        return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Telefono", "Edad", "Dojo", "Pais", "Categoria", "Estado", "Metodo", "Grupo_ID", "Pago_ID", "Pago_Estado"])
 
 def guardar_inscripcion(datos):
     try:
@@ -97,9 +111,11 @@ def guardar_inscripcion(datos):
             "Dojo": datos['dojo'].upper(),
             "Pais": datos['pais'],
             "Categoria": datos['categoria'],
-            "Estado": "CONFIRMADO",
+            "Estado": datos['estado'],
             "Metodo": datos['metodo'],
-            "Grupo_ID": datos.get('grupo_id', '')
+            "Grupo_ID": datos.get('grupo_id', ''),
+            "Pago_ID": datos.get('pago_id', ''),
+            "Pago_Estado": datos.get('pago_estado', '')
         }])
         
         df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
@@ -138,7 +154,6 @@ def leer_brackets():
             ])
         return df
     except Exception as e:
-        st.error(f"Error leyendo brackets: {e}")
         return pd.DataFrame(columns=[
             "Categoria", "Ronda", "Partido_ID", "Competidor1_Nombre", 
             "Dojo1", "Competidor2_Nombre", "Dojo2", "Ganador_Nombre", 
@@ -151,10 +166,80 @@ def guardar_brackets(df):
         conn.update(worksheet="Brackets", data=df)
         return True
     except Exception as e:
-        st.error(f"Error guardando brackets: {e}")
         return False
 
-# === GENERADOR DE BRACKETS PERFECTAMENTE ORDENADOS ===
+# === FUNCIONES DE MERCADO PAGO ===
+def crear_preferencia_pago(nombre, email, monto, descripcion, referencia):
+    """
+    Crea una preferencia de pago en Mercado Pago
+    """
+    try:
+        preference_data = {
+            "items": [
+                {
+                    "title": descripcion,
+                    "quantity": 1,
+                    "currency_id": "CLP",
+                    "unit_price": float(monto)
+                }
+            ],
+            "payer": {
+                "name": nombre.split()[0] if nombre.split() else nombre,
+                "surname": " ".join(nombre.split()[1:]) if len(nombre.split()) > 1 else "",
+                "email": email
+            },
+            "back_urls": {
+                "success": "https://wkbchile.streamlit.app/?success=true",
+                "failure": "https://wkbchile.streamlit.app/?failure=true",
+                "pending": "https://wkbchile.streamlit.app/?pending=true"
+            },
+            "auto_return": "approved",
+            "external_reference": referencia,
+            "statement_descriptor": "WKB CHILE",
+            "payment_methods": {
+                "excluded_payment_methods": [],
+                "excluded_payment_types": [],
+                "installments": 1
+            }
+        }
+        
+        preference = sdk.preference().create(preference_data)
+        
+        if preference["status"] == 201:
+            return True, preference["response"]
+        else:
+            return False, None
+            
+    except Exception as e:
+        st.error(f"Error creando preferencia de pago: {e}")
+        return False, None
+
+def verificar_pago(external_reference):
+    """
+    Verifica el estado de un pago por su referencia externa
+    """
+    try:
+        # Buscar pagos por referencia externa
+        filters = {
+            "external_reference": external_reference
+        }
+        payments = sdk.payment().search(filters=filters)
+        
+        if payments["status"] == 200 and payments["response"]["results"]:
+            payment = payments["response"]["results"][0]
+            return {
+                "id": payment["id"],
+                "status": payment["status"],
+                "status_detail": payment["status_detail"],
+                "payment_method": payment["payment_method_id"],
+                "date_approved": payment.get("date_approved", "")
+            }
+    except:
+        pass
+    
+    return None
+
+# === GENERADOR DE BRACKETS ===
 def generar_brackets_ordenados():
     """
     Genera brackets con estructura de árbol perfectamente alineada
@@ -176,7 +261,6 @@ def generar_brackets_ordenados():
         num_competidores = len(df_cat)
         
         if num_competidores >= 2:
-            # Calcular estructura del torneo
             num_rondas = math.ceil(math.log2(num_competidores))
             capacidad_total = 2 ** num_rondas
             
@@ -186,10 +270,8 @@ def generar_brackets_ordenados():
                 'capacidad': capacidad_total
             }
             
-            # Mezclar competidores aleatoriamente
             competidores = df_cat.sample(frac=1).reset_index(drop=True)
             
-            # Crear lista con competidores y BYEs
             lista_competidores = []
             for i in range(capacidad_total):
                 if i < num_competidores:
@@ -264,10 +346,10 @@ def generar_brackets_ordenados():
     
     return False, "No se pudieron generar los brackets"
 
-# === VISUALIZADOR DE BRACKETS PERFECTAMENTE ORDENADOS ===
+# === VISUALIZADOR DE BRACKETS ===
 def mostrar_brackets_ordenados(df_cat, es_admin=False):
     """
-    Muestra brackets con alineación perfecta usando posiciones absolutas
+    Muestra brackets con alineación perfecta
     """
     if df_cat.empty:
         st.info("No hay partidos para esta categoría")
@@ -281,17 +363,15 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
         df_ronda = df_cat[df_cat['Ronda'] == ronda].sort_values('Posicion')
         partidos_por_ronda[ronda] = df_ronda.to_dict('records')
     
-    # Calcular alturas para alineación perfecta
-    # Cada partido ocupa 120px de alto, con 20px de separación
+    # Calcular alturas
     altura_partido = 120
     separacion = 20
     altura_total_por_partido = altura_partido + separacion
     
-    # Altura total del bracket
     num_partidos_ronda1 = len(partidos_por_ronda[1])
     altura_total = num_partidos_ronda1 * altura_total_por_partido + 100
     
-    # CSS personalizado para el contenedor
+    # CSS
     st.markdown(f"""
     <style>
     .bracket-container {{
@@ -304,13 +384,6 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
         border-radius: 16px;
         padding: 20px 0;
         margin: 20px 0;
-    }}
-    .bracket-row {{
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
     }}
     .ronda-columna {{
         position: absolute;
@@ -343,13 +416,6 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
         transform: scale(1.02);
         border-color: #ff2b2b;
         z-index: 100;
-    }}
-    .partido-card.completado {{
-        border-color: gold;
-        opacity: 0.9;
-    }}
-    .partido-card.pendiente {{
-        border-color: #ff2b2b;
     }}
     .partido-id {{
         position: absolute;
@@ -397,45 +463,21 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
         display: inline-block;
         margin-top: 4px;
     }}
-    .conector {{
-        position: absolute;
-        width: 40px;
-        height: 2px;
-        background: linear-gradient(90deg, #ff2b2b, transparent);
-        top: 50%;
-        right: -40px;
-    }}
-    .conector-izquierdo {{
-        position: absolute;
-        width: 40px;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, #ff2b2b);
-        top: 50%;
-        left: -40px;
-    }}
-    .admin-controls {{
-        background: rgba(0,0,0,0.3);
-        border-radius: 8px;
-        padding: 10px;
-        margin: 10px 0;
-        border: 1px solid #ff2b2b;
-    }}
     </style>
     """, unsafe_allow_html=True)
     
-    # Contenedor principal
-    html = f'<div class="bracket-container"><div class="bracket-row">'
+    # Contenedor
+    html = f'<div class="bracket-container"><div style="position:relative; height:100%;">'
     
-    # Crear columnas para cada ronda
+    # Crear columnas
     for ronda in range(1, total_rondas + 1):
         partidos = partidos_por_ronda.get(ronda, [])
         if not partidos:
             continue
         
-        # Posición X de la columna (espaciado entre rondas)
         x_pos = (ronda - 1) * 320
         
-        # Título de la ronda
+        # Título
         if ronda == total_rondas:
             titulo = "🏆 FINAL"
         elif ronda == total_rondas - 1:
@@ -448,19 +490,12 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
         html += f'<div class="ronda-columna" style="left: {x_pos}px;">'
         html += f'<div class="ronda-titulo">{titulo}</div>'
         
-        # Calcular espaciado vertical para alineación perfecta
-        # En ronda 1, los partidos están espaciados uniformemente
-        # En rondas superiores, se alinean con los partidos que los alimentan
         for i, partido in enumerate(partidos):
             if ronda == 1:
-                # Primera ronda: espaciado uniforme
                 y_pos = 50 + i * altura_total_por_partido
             else:
-                # Rondas superiores: alinear con los partidos de la ronda anterior
-                # Cada partido de ronda superior debe estar centrado entre los dos que lo alimentan
                 partidos_anteriores = partidos_por_ronda.get(ronda - 1, [])
                 if partidos_anteriores:
-                    # Encontrar los dos partidos que alimentan este
                     idx_base = partido['Posicion'] * 2
                     if idx_base < len(partidos_anteriores):
                         y1 = 50 + idx_base * altura_total_por_partido
@@ -471,16 +506,10 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
                 else:
                     y_pos = 50
             
-            # Determinar clases CSS
             clases_card = ["partido-card"]
-            if partido['Estado'] == "COMPLETADO":
+            if partido['Estado'] == "COMPLETADO" or partido['Ganador_Nombre']:
                 clases_card.append("completado")
-            elif partido['Ganador_Nombre']:
-                clases_card.append("completado")
-            else:
-                clases_card.append("pendiente")
             
-            # Construir tarjeta de partido
             html += f'<div class="{" ".join(clases_card)}" style="top: {y_pos}px;">'
             html += f'<span class="partido-id">#{partido["Partido_ID"]}</span>'
             
@@ -496,7 +525,7 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
                 html += f'<div class="dojo">{partido["Dojo1"]}</div>'
             html += '</div>'
             
-            # BYE badge si aplica
+            # BYE
             if partido['Competidor1_Nombre'] == "BYE" or partido['Competidor2_Nombre'] == "BYE":
                 html += '<div class="bye-badge">⭐ BYE</div>'
             
@@ -512,148 +541,108 @@ def mostrar_brackets_ordenados(df_cat, es_admin=False):
                 html += f'<div class="dojo">{partido["Dojo2"]}</div>'
             html += '</div>'
             
-            # Conectores para la siguiente ronda
-            if ronda < total_rondas:
-                html += '<div class="conector"></div>'
-            
             html += '</div>'  # Cierra partido-card
         
         html += '</div>'  # Cierra ronda-columna
     
-    html += '</div></div>'  # Cierra bracket-row y bracket-container
+    html += '</div></div>'
     
     st.markdown(html, unsafe_allow_html=True)
     
     # Leyenda
     st.markdown("""
     <div style="display: flex; gap: 30px; justify-content: center; margin: 20px 0; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 50px;">
-        <span style="display: flex; align-items: center; gap: 5px;"><span style="width: 16px; height: 16px; background: #ff2b2b; border-radius: 4px;"></span> Aka (Rojo)</span>
-        <span style="display: flex; align-items: center; gap: 5px;"><span style="width: 16px; height: 16px; background: #1e90ff; border-radius: 4px;"></span> Ao (Azul)</span>
-        <span style="display: flex; align-items: center; gap: 5px;"><span style="width: 16px; height: 16px; background: gold; border-radius: 4px;"></span> Ganador</span>
-        <span style="display: flex; align-items: center; gap: 5px;">⭐ BYE</span>
+        <span><span style="color:#ff2b2b;">█</span> Aka (Rojo)</span>
+        <span><span style="color:#1e90ff;">█</span> Ao (Azul)</span>
+        <span><span style="color:gold;">🏆</span> Ganador</span>
+        <span>⭐ BYE</span>
     </div>
     """, unsafe_allow_html=True)
 
-# === SISTEMA DE ACTUALIZACIÓN DE GANADORES PARA ADMIN ===
+# === ADMIN: ACTUALIZAR GANADORES ===
 def admin_actualizar_ganadores(df_cat, categoria):
     """
-    Interfaz para que el admin actualice los ganadores ronda por ronda
+    Interfaz para que el admin actualice los ganadores
     """
-    st.markdown('<div class="admin-controls">', unsafe_allow_html=True)
     st.markdown("### 👑 ACTUALIZAR GANADORES")
     
-    # Obtener rondas disponibles
     rondas = sorted(df_cat['Ronda'].unique())
     
-    # Estado de la sesión para tracking
     if 'ronda_seleccionada' not in st.session_state:
         st.session_state.ronda_seleccionada = 1
     
     col1, col2 = st.columns([1, 3])
     with col1:
         ronda_sel = st.selectbox(
-            "Seleccionar Ronda",
+            "Ronda",
             rondas,
-            index=rondas.index(st.session_state.ronda_seleccionada) if st.session_state.ronda_seleccionada in rondas else 0,
-            key="selector_ronda"
+            index=rondas.index(st.session_state.ronda_seleccionada) if st.session_state.ronda_seleccionada in rondas else 0
         )
         st.session_state.ronda_seleccionada = ronda_sel
     
-    with col2:
-        st.markdown(f"**Partidos disponibles en Ronda {ronda_sel}**")
-    
-    # Filtrar partidos de la ronda seleccionada
     df_ronda = df_cat[df_cat['Ronda'] == ronda_sel].sort_values('Posicion')
     
-    # Partidos pendientes (sin ganador)
     df_pendientes = df_ronda[
         (df_ronda['Ganador_Nombre'] == "") & 
         (df_ronda['Competidor1_Nombre'] != "BYE") & 
         (df_ronda['Competidor2_Nombre'] != "BYE")
     ]
     
-    # Partidos completados
-    df_completados = df_ronda[df_ronda['Ganador_Nombre'] != ""]
-    
     if not df_pendientes.empty:
-        st.markdown("#### ⚔️ Partidos Pendientes")
-        
         for _, partido in df_pendientes.iterrows():
-            with st.container():
-                col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
-                
-                with col1:
-                    st.markdown(f"**{partido['Competidor1_Nombre']}**")
-                    if partido['Dojo1']:
-                        st.caption(partido['Dojo1'])
-                
-                with col2:
-                    st.markdown(f"**{partido['Competidor2_Nombre']}**")
-                    if partido['Dojo2']:
-                        st.caption(partido['Dojo2'])
-                
-                with col3:
-                    ganador = st.radio(
-                        "Ganador",
-                        [partido['Competidor1_Nombre'], partido['Competidor2_Nombre']],
-                        key=f"radio_{partido['Partido_ID']}",
-                        label_visibility="collapsed",
-                        horizontal=True
-                    )
-                
-                with col4:
-                    if st.button("✓ CONFIRMAR", key=f"btn_{partido['Partido_ID']}"):
-                        # Actualizar ganador en el DataFrame
-                        df_brackets = leer_brackets()
-                        
-                        # Actualizar partido actual
-                        mask_actual = (df_brackets['Categoria'] == categoria) & (df_brackets['Partido_ID'] == partido['Partido_ID'])
-                        df_brackets.loc[mask_actual, 'Ganador_Nombre'] = ganador
-                        df_brackets.loc[mask_actual, 'Estado'] = "COMPLETADO"
-                        
-                        # Propagar a siguiente ronda
-                        siguiente_ronda = ronda_sel + 1
-                        siguiente_posicion = partido['Posicion'] // 2
-                        
-                        mask_siguiente = (df_brackets['Categoria'] == categoria) & \
-                                        (df_brackets['Ronda'] == siguiente_ronda) & \
-                                        (df_brackets['Posicion'] == siguiente_posicion)
-                        
-                        if not df_brackets[mask_siguiente].empty:
-                            # Determinar si va como competidor1 o competidor2
-                            if partido['Posicion'] % 2 == 0:
-                                df_brackets.loc[mask_siguiente, 'Competidor1_Nombre'] = ganador
-                                df_brackets.loc[mask_siguiente, 'Dojo1'] = partido['Dojo1'] if ganador == partido['Competidor1_Nombre'] else partido['Dojo2']
-                            else:
-                                df_brackets.loc[mask_siguiente, 'Competidor2_Nombre'] = ganador
-                                df_brackets.loc[mask_siguiente, 'Dojo2'] = partido['Dojo1'] if ganador == partido['Competidor1_Nombre'] else partido['Dojo2']
-                            
-                            # Verificar si el siguiente partido ya tiene ambos competidores
-                            sig_partido = df_brackets[mask_siguiente].iloc[0]
-                            if sig_partido['Competidor1_Nombre'] and sig_partido['Competidor2_Nombre']:
-                                if "BYE" not in [sig_partido['Competidor1_Nombre'], sig_partido['Competidor2_Nombre']]:
-                                    pass  # Listo para jugar
-                        
-                        # Guardar cambios
-                        if guardar_brackets(df_brackets):
-                            st.success(f"✅ Ganador actualizado: {ganador}")
-                            st.rerun()
-                
-                st.markdown("---")
-    
+            col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+            
+            with col1:
+                st.markdown(f"**{partido['Competidor1_Nombre']}**")
+                if partido['Dojo1']:
+                    st.caption(partido['Dojo1'])
+            
+            with col2:
+                st.markdown(f"**{partido['Competidor2_Nombre']}**")
+                if partido['Dojo2']:
+                    st.caption(partido['Dojo2'])
+            
+            with col3:
+                ganador = st.radio(
+                    "Ganador",
+                    [partido['Competidor1_Nombre'], partido['Competidor2_Nombre']],
+                    key=f"radio_{partido['Partido_ID']}",
+                    label_visibility="collapsed",
+                    horizontal=True
+                )
+            
+            with col4:
+                if st.button("✓", key=f"btn_{partido['Partido_ID']}"):
+                    df_brackets = leer_brackets()
+                    
+                    # Actualizar partido actual
+                    mask_actual = (df_brackets['Categoria'] == categoria) & (df_brackets['Partido_ID'] == partido['Partido_ID'])
+                    df_brackets.loc[mask_actual, 'Ganador_Nombre'] = ganador
+                    df_brackets.loc[mask_actual, 'Estado'] = "COMPLETADO"
+                    
+                    # Propagar a siguiente ronda
+                    siguiente_ronda = ronda_sel + 1
+                    siguiente_posicion = partido['Posicion'] // 2
+                    
+                    mask_siguiente = (df_brackets['Categoria'] == categoria) & \
+                                    (df_brackets['Ronda'] == siguiente_ronda) & \
+                                    (df_brackets['Posicion'] == siguiente_posicion)
+                    
+                    if not df_brackets[mask_siguiente].empty:
+                        if partido['Posicion'] % 2 == 0:
+                            df_brackets.loc[mask_siguiente, 'Competidor1_Nombre'] = ganador
+                            df_brackets.loc[mask_siguiente, 'Dojo1'] = partido['Dojo1'] if ganador == partido['Competidor1_Nombre'] else partido['Dojo2']
+                        else:
+                            df_brackets.loc[mask_siguiente, 'Competidor2_Nombre'] = ganador
+                            df_brackets.loc[mask_siguiente, 'Dojo2'] = partido['Dojo1'] if ganador == partido['Competidor1_Nombre'] else partido['Dojo2']
+                    
+                    if guardar_brackets(df_brackets):
+                        st.success(f"✅ Ganador: {ganador}")
+                        st.rerun()
+            
+            st.markdown("---")
     else:
         st.info("✅ No hay partidos pendientes en esta ronda")
-    
-    if not df_completados.empty:
-        with st.expander("Ver partidos completados"):
-            for _, partido in df_completados.iterrows():
-                st.markdown(f"""
-                **Partido #{partido['Partido_ID']}**  
-                {partido['Competidor1_Nombre']} vs {partido['Competidor2_Nombre']}  
-                🏆 **Ganador: {partido['Ganador_Nombre']}**
-                """)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
 
 # === CSS PRINCIPAL ===
 css = """
@@ -828,6 +817,10 @@ css = """
         box-shadow: 0 15px 30px rgba(255,43,43,0.3) !important;
     }
     
+    .payment-button > button {
+        background: linear-gradient(135deg, #00a650, #00cc66) !important;
+    }
+    
     hr {
         border: none;
         height: 1px;
@@ -843,6 +836,12 @@ css = """
         letter-spacing: 1px;
         border-top: 1px solid rgba(255,255,255,0.03);
         margin-top: 60px;
+    }
+    
+    .mp-logo {
+        height: 30px;
+        margin-right: 10px;
+        vertical-align: middle;
     }
 </style>
 """
@@ -936,9 +935,21 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
         
+        # Estadísticas de pago
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            pagados_mp = len(df_conf[df_conf['Metodo'] == 'MERCADOPAGO'])
+            st.metric("Pagos MP", pagados_mp)
+        with col2:
+            pagados_vip = len(df_conf[df_conf['Metodo'] == 'VIP'])
+            st.metric("Códigos VIP", pagados_vip)
+        with col3:
+            pendientes = len(df_conf[df_conf['Metodo'] == 'PENDIENTE'])
+            st.metric("Pendientes", pendientes)
+        
         st.markdown("<hr>", unsafe_allow_html=True)
         
-        # Gráfico de distribución
+        # Gráfico
         counts = df_conf['Categoria'].value_counts().sort_values()
         
         fig = go.Figure()
@@ -961,15 +972,7 @@ with tab1:
             paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color='white', family='Inter'),
             height=500,
-            margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.05)',
-                title="Número de Inscritos"
-            ),
-            yaxis=dict(
-                showgrid=False
-            )
+            margin=dict(l=0, r=0, t=30, b=0)
         )
         
         st.plotly_chart(fig, use_container_width=True)
@@ -983,6 +986,22 @@ with tab1:
 with tab2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 📝 INSCRIPCIÓN INDIVIDUAL")
+    
+    # Procesar retorno de Mercado Pago
+    params = st.query_params
+    if "success" in params and params["success"] == "true":
+        st.balloons()
+        st.success("✅ ¡Pago exitoso! Tu inscripción está siendo procesada.")
+        st.info("Recibirás un email de confirmación en los próximos minutos.")
+        time.sleep(3)
+        st.query_params.clear()
+        st.rerun()
+    elif "failure" in params:
+        st.error("❌ El pago no pudo completarse. Por favor intenta nuevamente.")
+        st.query_params.clear()
+    elif "pending" in params:
+        st.warning("⏳ El pago está pendiente. Te notificaremos cuando se confirme.")
+        st.query_params.clear()
     
     with st.form("form_inscripcion"):
         col1, col2 = st.columns(2)
@@ -1003,8 +1022,9 @@ with tab2:
         
         metodo_pago = st.radio(
             "Método de pago",
-            ["Código VIP", "Transferencia", "Pagar después"],
-            horizontal=True
+            ["Código VIP", "Mercado Pago"],
+            horizontal=True,
+            help="VIP: Código especial. Mercado Pago: Pago con tarjeta, transferencia o efectivo"
         )
         
         codigo_vip = ""
@@ -1013,7 +1033,7 @@ with tab2:
         
         terminos = st.checkbox("Acepto los términos y condiciones")
         
-        submitted = st.form_submit_button("INSCRIBIRSE")
+        submitted = st.form_submit_button("CONTINUAR")
         
         if submitted:
             errores = []
@@ -1031,8 +1051,8 @@ with tab2:
                 errores.append("Código VIP inválido")
             
             if not errores:
-                datos = {
-                    'id': generar_id(nombre, email),
+                # Guardar en session state para usar después
+                st.session_state.inscripcion_temp = {
                     'nombre': nombre,
                     'email': email,
                     'telefono': telefono,
@@ -1040,18 +1060,110 @@ with tab2:
                     'dojo': dojo,
                     'pais': pais,
                     'categoria': categoria,
-                    'metodo': 'VIP' if metodo_pago == "Código VIP" else 'Individual',
-                    'grupo_id': ''
+                    'metodo': metodo_pago
                 }
                 
-                if guardar_inscripcion(datos):
-                    st.balloons()
-                    st.success("✅ ¡Inscripción exitosa!")
-                    time.sleep(2)
-                    st.rerun()
-            else:
-                for error in errores:
-                    st.error(error)
+                if metodo_pago == "Código VIP":
+                    # Pago con código - guardar inmediatamente
+                    datos = {
+                        'id': generar_id(nombre, email),
+                        'nombre': nombre,
+                        'email': email,
+                        'telefono': telefono,
+                        'edad': edad,
+                        'dojo': dojo,
+                        'pais': pais,
+                        'categoria': categoria,
+                        'estado': 'CONFIRMADO',
+                        'metodo': 'VIP',
+                        'grupo_id': '',
+                        'pago_id': '',
+                        'pago_estado': 'approved'
+                    }
+                    
+                    if guardar_inscripcion(datos):
+                        st.balloons()
+                        st.success("✅ ¡Inscripción exitosa con código VIP!")
+                        time.sleep(2)
+                        st.rerun()
+                
+                elif metodo_pago == "Mercado Pago":
+                    # Crear preferencia de pago
+                    referencia = generar_referencia_pago()
+                    descripcion = f"Inscripción WKB - {categoria} - {nombre}"
+                    
+                    with st.spinner("Preparando pago con Mercado Pago..."):
+                        exito, preferencia = crear_preferencia_pago(
+                            nombre, email, PRECIO, descripcion, referencia
+                        )
+                        
+                        if exito and preferencia:
+                            # Guardar referencia en session state
+                            st.session_state.pago_referencia = referencia
+                            st.session_state.pago_data = {
+                                'nombre': nombre,
+                                'email': email,
+                                'telefono': telefono,
+                                'edad': edad,
+                                'dojo': dojo,
+                                'pais': pais,
+                                'categoria': categoria
+                            }
+                            
+                            # Mostrar opciones de pago
+                            st.info("⏳ Redirigiendo a Mercado Pago...")
+                            
+                            # Link de pago
+                            init_point = preferencia.get('init_point', '')
+                            if init_point:
+                                st.markdown(f"""
+                                <div style="text-align: center; margin: 30px 0;">
+                                    <a href="{init_point}" target="_blank">
+                                        <button style="background: linear-gradient(135deg, #00a650, #00cc66); 
+                                                     color: white; 
+                                                     border: none; 
+                                                     padding: 15px 40px; 
+                                                     border-radius: 50px; 
+                                                     font-size: 1.2rem;
+                                                     font-weight: bold;
+                                                     cursor: pointer;
+                                                     box-shadow: 0 10px 20px rgba(0,166,80,0.3);
+                                                     transition: all 0.3s;">
+                                            <img src="https://static.wixstatic.com/media/6761e5_2a4f07de0e7a4dbfb804c03cde73b8d3~mv2.png" 
+                                                 style="height: 30px; margin-right: 10px; vertical-align: middle;">
+                                            PAGAR CON MERCADO PAGO
+                                        </button>
+                                    </a>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                st.markdown("""
+                                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 12px; margin-top: 20px;">
+                                    <h4 style="color: white;">💳 Opciones de pago aceptadas:</h4>
+                                    <ul style="color: rgba(255,255,255,0.8);">
+                                        <li>Tarjetas de crédito (hasta 12 cuotas)</li>
+                                        <li>Tarjetas de débito</li>
+                                        <li>Efectivo (RedCompra, Servipag)</li>
+                                        <li>Transferencia bancaria</li>
+                                    </ul>
+                                    <p style="color: #00a650; font-size: 0.9rem;">🔒 Pago 100% seguro procesado por Mercado Pago</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Instrucciones
+                                with st.expander("📋 Instrucciones"):
+                                    st.markdown("""
+                                    1. Haz clic en el botón de Mercado Pago
+                                    2. Serás redirigido al sitio seguro de Mercado Pago
+                                    3. Elige tu método de pago preferido
+                                    4. Completa el pago
+                                    5. Serás redirigido automáticamente a esta página
+                                    6. Recibirás la confirmación por email
+                                    """)
+                            else:
+                                st.error("Error al generar el link de pago")
+                        else:
+                            st.error("Error al conectar con Mercado Pago. Por favor intenta más tarde.")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1077,7 +1189,6 @@ with tab3:
         - **Nombre**, **Email**, **Telefono**, **Edad**, **Dojo**, **Pais**, **Categoria**
         """)
         
-        # Template de descarga
         template_df = pd.DataFrame({
             'Nombre': ['Juan Pérez', 'María González'],
             'Email': ['juan@email.com', 'maria@email.com'],
@@ -1116,8 +1227,8 @@ with tab3:
             if st.button("🔄 PROCESAR INSCRIPCIONES"):
                 with st.spinner("Procesando..."):
                     grupo_id = generar_id_grupal()
+                    referencia_pago = generar_referencia_pago()
                     
-                    # Validar y crear registros
                     registros_validos = []
                     errores = []
                     
@@ -1154,9 +1265,11 @@ with tab3:
                                 "Dojo": dojo.upper(),
                                 "Pais": pais,
                                 "Categoria": categoria,
-                                "Estado": "CONFIRMADO",
+                                "Estado": "PENDIENTE",
                                 "Metodo": "GRUPAL",
-                                "Grupo_ID": grupo_id
+                                "Grupo_ID": grupo_id,
+                                "Pago_ID": referencia_pago,
+                                "Pago_Estado": "pending"
                             })
                         
                         except Exception as e:
@@ -1177,12 +1290,46 @@ with tab3:
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        if st.button("💳 CONFIRMAR PAGO Y GUARDAR"):
-                            if guardar_inscripciones_masivas(df_nuevas):
-                                st.balloons()
-                                st.success("✅ Inscripciones guardadas exitosamente!")
-                                time.sleep(2)
-                                st.rerun()
+                        # Guardar en session state
+                        st.session_state.grupo_data = {
+                            'df': df_nuevas,
+                            'total': total_pagar,
+                            'referencia': referencia_pago
+                        }
+                        
+                        # Botón de pago
+                        descripcion = f"Inscripción grupal WKB - {len(registros_validos)} personas"
+                        
+                        with st.spinner("Preparando pago..."):
+                            exito, preferencia = crear_preferencia_pago(
+                                "GRUPO", 
+                                registros_validos[0]['Email'], 
+                                total_pagar, 
+                                descripcion, 
+                                referencia_pago
+                            )
+                            
+                            if exito and preferencia:
+                                init_point = preferencia.get('init_point', '')
+                                if init_point:
+                                    st.markdown(f"""
+                                    <div style="text-align: center; margin: 20px 0;">
+                                        <a href="{init_point}" target="_blank">
+                                            <button style="background: linear-gradient(135deg, #00a650, #00cc66); 
+                                                         color: white; 
+                                                         border: none; 
+                                                         padding: 15px 40px; 
+                                                         border-radius: 50px; 
+                                                         font-size: 1.2rem;
+                                                         font-weight: bold;
+                                                         cursor: pointer;">
+                                                <img src="https://static.wixstatic.com/media/6761e5_2a4f07de0e7a4dbfb804c03cde73b8d3~mv2.png" 
+                                                     style="height: 30px; margin-right: 10px; vertical-align: middle;">
+                                                PAGAR CON MERCADO PAGO
+                                            </button>
+                                        </a>
+                                    </div>
+                                    """, unsafe_allow_html=True)
         
         except Exception as e:
             st.error(f"Error al leer archivo: {e}")
@@ -1194,13 +1341,11 @@ with tab4:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 🏆 BRACKETS DEL TORNEO")
     
-    # Verificar admin
     is_admin = False
     with st.expander("🔐 Acceso Admin", expanded=False):
         admin_pass = st.text_input("Contraseña Admin", type="password", key="admin_pass_brackets")
         is_admin = verificar_admin(admin_pass)
     
-    # Generar brackets (solo admin)
     if is_admin:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -1215,7 +1360,6 @@ with tab4:
                         st.warning(mensaje)
         st.markdown("<hr>", unsafe_allow_html=True)
     
-    # Mostrar brackets
     df_brackets = leer_brackets()
     
     if not df_brackets.empty:
@@ -1225,15 +1369,13 @@ with tab4:
         df_cat = df_brackets[df_brackets['Categoria'] == categoria_sel]
         
         if not df_cat.empty:
-            # Mostrar brackets ordenados
             mostrar_brackets_ordenados(df_cat, is_admin)
             
-            # Panel de admin para actualizar ganadores
             if is_admin:
                 admin_actualizar_ganadores(df_cat, categoria_sel)
     
     else:
-        st.info("📌 No hay brackets generados. Un administrador debe generarlos primero.")
+        st.info("📌 No hay brackets generados")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1245,7 +1387,7 @@ with tab5:
     password = st.text_input("Contraseña", type="password", key="admin_pass_main")
     
     if verificar_admin(password):
-        tabs_admin = st.tabs(["📋 Inscripciones", "🏆 Gestión de Brackets", "📊 Estadísticas"])
+        tabs_admin = st.tabs(["📋 Inscripciones", "🏆 Brackets", "💰 Pagos", "📊 Estadísticas"])
         
         with tabs_admin[0]:
             df_admin = leer_inscripciones()
@@ -1259,52 +1401,67 @@ with tab5:
                     "text/csv",
                     use_container_width=True
                 )
-            else:
-                st.info("No hay inscripciones")
         
         with tabs_admin[1]:
             df_b = leer_brackets()
             if not df_b.empty:
                 st.dataframe(df_b, use_container_width=True, hide_index=True)
-                
                 if st.button("⚠️ REINICIAR BRACKETS", use_container_width=True):
                     df_vacio = pd.DataFrame(columns=df_b.columns)
                     if guardar_brackets(df_vacio):
                         st.warning("Brackets reiniciados")
                         st.rerun()
-            else:
-                st.info("No hay brackets generados")
         
         with tabs_admin[2]:
+            st.markdown("#### 💰 Seguimiento de Pagos")
+            df_pagos = leer_inscripciones()
+            if not df_pagos.empty:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    total_mp = len(df_pagos[df_pagos['Metodo'] == 'MERCADOPAGO'])
+                    st.metric("Pagos MP", total_mp)
+                with col2:
+                    monto_mp = len(df_pagos[df_pagos['Metodo'] == 'MERCADOPAGO']) * PRECIO
+                    st.metric("Monto MP", formatear_peso(monto_mp))
+                with col3:
+                    pendientes = len(df_pagos[df_pagos['Pago_Estado'] == 'pending'])
+                    st.metric("Pendientes", pendientes)
+                
+                st.dataframe(
+                    df_pagos[df_pagos['Metodo'] == 'MERCADOPAGO'][['Fecha', 'Nombre', 'Email', 'Pago_Estado', 'Pago_ID']],
+                    use_container_width=True
+                )
+        
+        with tabs_admin[3]:
             df_stats = leer_inscripciones()
             if not df_stats.empty:
                 df_conf = df_stats[df_stats['Estado'] == 'CONFIRMADO']
                 
                 col1, col2, col3 = st.columns(3)
                 
-                total_individual = len(df_conf[df_conf['Metodo'] == 'Individual']) * PRECIO
+                total_vip = len(df_conf[df_conf['Metodo'] == 'VIP']) * PRECIO
+                total_mp = len(df_conf[df_conf['Metodo'] == 'MERCADOPAGO']) * PRECIO
                 total_grupal = len(df_conf[df_conf['Metodo'] == 'GRUPAL']) * PRECIO_GRUPAL
-                total = total_individual + total_grupal
+                total = total_vip + total_mp + total_grupal
                 
                 with col1:
                     st.markdown(f"""
                     <div class="metric-container">
-                        <div class="metric-label">INGRESOS</div>
+                        <div class="metric-label">INGRESOS TOTALES</div>
                         <div class="metric-value">{formatear_peso(total)}</div>
                     </div>
                     """, unsafe_allow_html=True)
                 
                 with col2:
-                    vip_count = len(df_stats[df_stats['Metodo'] == 'VIP'])
                     st.markdown(f"""
                     <div class="metric-container">
-                        <div class="metric-label">VIP</div>
-                        <div class="metric-value">{vip_count}</div>
+                        <div class="metric-label">INSCRIPCIONES</div>
+                        <div class="metric-value">{len(df_conf)}</div>
                     </div>
                     """, unsafe_allow_html=True)
                 
                 with col3:
-                    grupos = len(df_conf[df_conf['Metodo'] == 'GRUPAL']['Grupo_ID'].unique())
+                    grupos = df_conf[df_conf['Metodo'] == 'GRUPAL']['Grupo_ID'].nunique()
                     st.markdown(f"""
                     <div class="metric-container">
                         <div class="metric-label">GRUPOS</div>
