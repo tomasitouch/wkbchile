@@ -558,6 +558,13 @@ def render_paso1():
     </div>
     """, unsafe_allow_html=True)
 
+
+
+
+
+
+
+
 def render_paso2():
     """Paso 2: Procesar pago"""
     
@@ -645,7 +652,6 @@ def render_paso2():
                 # Crear preferencia en MercadoPago
                 preferencia_id = f"WKB-{datos['id_inscripcion']}-{int(time.time())}"
                 
-                # CORRECCIÓN: Agregar 'dojo' al diccionario
                 datos_pago = {
                     "comprador": {
                         "nombre": datos["nombre"],
@@ -676,14 +682,95 @@ def render_paso2():
                     
                     st.info("⚠️ Después de pagar, espera la confirmación automática")
                     
-                    # Botón para simular pago (desarrollo)
-                    if st.button("✅ SIMULAR PAGO EXITOSO (solo pruebas)", use_container_width=True):
+                    # Botón para simular pago (desarrollo) - AHORA COMPLETA LA INSCRIPCIÓN DIRECTAMENTE
+                    if st.button("💰 SIMULAR PAGO EXITOSO (Modo Prueba)", use_container_width=True):
+                        # Guardar directamente como confirmado
                         st.session_state.paso = 'confirmacion'
                         st.rerun()
                 else:
                     st.error("Error al crear el pago. Intenta nuevamente.")
     
     st.markdown('</div>', unsafe_allow_html=True)
+
+def render_paso3():
+    """Paso 3: Confirmación exitosa"""
+    
+    datos = st.session_state.datos_competidor
+    
+    with st.spinner("Confirmando inscripción..."):
+        # Datos para guardar
+        registro = {
+            "ID_Inscripcion": datos["id_inscripcion"],
+            "Fecha_Registro": datos["fecha_registro"],
+            "Nombre_Completo": datos["nombre"],
+            "Edad": datos["edad"],
+            "Email": datos["email"],
+            "Telefono": datos["telefono"],
+            "Dojo": datos["dojo"],
+            "Categoria": datos["categoria"],
+            "Estado_Pago": "Confirmado",
+            "Monto_Pagado": PRECIO_INSCRIPCION,
+            "Metodo_Pago": "MercadoPago (Simulado)" if st.session_state.get("modo_prueba", False) else "MercadoPago",
+            "Preferencia_ID": st.session_state.get("preferencia_id", ""),
+            "Fecha_Pago": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Guardar en sheets
+        if guardar_inscripcion(registro):
+            # Guardar también en la hoja de pagos
+            pago = {
+                "ID_Inscripcion": datos["id_inscripcion"],
+                "Nombre": datos["nombre"],
+                "Monto": PRECIO_INSCRIPCION,
+                "Fecha": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Estado": "aprobado",
+                "Metodo": "MercadoPago (Simulado)" if st.session_state.get("modo_prueba", False) else "MercadoPago"
+            }
+            guardar_pago(pago)
+            
+            # Limpiar modo prueba
+            if "modo_prueba" in st.session_state:
+                del st.session_state["modo_prueba"]
+            
+            # Mostrar confirmación
+            st.balloons()
+            
+            st.markdown(f"""
+            <div class="success-message">
+                <h2>✅ ¡INSCRIPCIÓN CONFIRMADA!</h2>
+                <p style="font-size: 18px; margin: 20px 0;">
+                    Gracias por inscribirte al Torneo WKB 2025
+                </p>
+                <div style="background: #0e1117; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                    <p><strong>ID de Inscripción:</strong> {datos['id_inscripcion']}</p>
+                    <p><strong>Competidor:</strong> {datos['nombre']}</p>
+                    <p><strong>Categoría:</strong> {datos['categoria']}</p>
+                    <p><strong>Dojo:</strong> {datos['dojo']}</p>
+                </div>
+                <p>Te enviaremos un email con más información a <strong>{datos['email']}</strong></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Botones para navegación
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📝 NUEVA INSCRIPCIÓN", use_container_width=True):
+                    # Limpiar estado
+                    for key in ['paso', 'datos_competidor', 'preferencia_id']:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.rerun()
+            with col2:
+                if st.button("👥 VER MURAL DE INSCRITOS", use_container_width=True):
+                    st.session_state.pagina = 'mural'
+                    st.rerun()
+        else:
+            st.error("Error guardando la inscripción. Contacta al organizador.")
+            st.session_state.paso = 'error'
+            st.rerun()
+
+
+
 
 def render_paso3():
     """Paso 3: Confirmación exitosa"""
