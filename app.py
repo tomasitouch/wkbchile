@@ -2,12 +2,14 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import plotly.express as px
+import plotly.graph_objects as go
 import hashlib
 import random
 import math
 import time
 from datetime import datetime
 import re
+import numpy as np
 
 # === CONFIGURACIÓN DE PÁGINA ===
 st.set_page_config(
@@ -53,13 +55,11 @@ def tiempo_restante():
     return dias, horas, minutos, segundos
 
 def verificar_admin(password):
-    if password:
-        # En producción usar st.secrets
-        try:
-            return hashlib.sha256(password.encode()).hexdigest() == st.secrets["general"]["admin_token_hash"]
-        except:
-            return password == "admin123" # Fallback para pruebas
-    return False
+    # En producción usar st.secrets
+    try:
+        return hashlib.sha256(password.encode()).hexdigest() == st.secrets["general"]["admin_token_hash"]
+    except:
+        return password == "admin123"  # Fallback para pruebas
 
 # === FUNCIONES DE GOOGLE SHEETS ===
 @st.cache_data(ttl=5)
@@ -67,7 +67,7 @@ def leer_inscripciones():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Inscripciones", ttl=0)
-        df = df.fillna("") # Limpieza preventiva
+        df = df.fillna("")
         if df.empty:
             return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Telefono", "Edad", "Dojo", "Pais", "Categoria", "Estado", "Metodo"])
         return df
@@ -107,7 +107,7 @@ def leer_brackets():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Brackets", ttl=0)
-        df = df.fillna("") # Limpieza preventiva
+        df = df.fillna("")
         if df.empty:
             return pd.DataFrame(columns=["Categoria", "Ronda", "Partido_ID", "Competidor1", "Dojo1", "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", "Posicion", "Total_Rondas"])
         return df
@@ -125,14 +125,16 @@ def guardar_brackets(df):
 # === GENERADOR DE BRACKETS DINÁMICOS ===
 def generar_brackets_dinamicos():
     df = leer_inscripciones()
-    if df.empty: return False, "No hay inscripciones"
+    if df.empty: 
+        return False, "No hay inscripciones registradas"
     
     df_conf = df[df['Estado'] == 'CONFIRMADO'].copy()
-    if len(df_conf) < 2: return False, "Se necesitan al menos 2 competidores"
+    if len(df_conf) < 2: 
+        return False, "Se necesitan al menos 2 competidores para generar brackets"
     
     todos_partidos = []
     stats_categorias = {}
-    pid = 1 # ID global único para partidos
+    pid = 1
     
     for categoria in CATEGORIAS:
         df_cat = df_conf[df_conf['Categoria'] == categoria]
@@ -145,7 +147,11 @@ def generar_brackets_dinamicos():
             num_rondas = math.ceil(math.log2(num_competidores))
             capacidad_total = 2 ** num_rondas
             
-            stats_categorias[categoria] = {'competidores': num_competidores, 'rondas': num_rondas}
+            stats_categorias[categoria] = {
+                'competidores': num_competidores, 
+                'rondas': num_rondas,
+                'capacidad': capacidad_total
+            }
             
             competidores_lista = participantes.copy()
             byes_necesarios = capacidad_total - num_competidores
@@ -158,22 +164,28 @@ def generar_brackets_dinamicos():
                 c1 = competidores_lista[i]
                 c2 = competidores_lista[i + 1]
                 
-                # Manejo seguro de nombres
                 n1 = c1['Nombre'] if c1 else "BYE"
                 d1 = c1['Dojo'] if c1 else "-"
                 n2 = c2['Nombre'] if c2 else "BYE"
                 d2 = c2['Dojo'] if c2 else "-"
                 
                 winner = ""
-                if n1 == "BYE": winner = n2
-                elif n2 == "BYE": winner = n1
+                if n1 == "BYE" and n2 != "BYE":
+                    winner = n2
+                elif n2 == "BYE" and n1 != "BYE":
+                    winner = n1
 
                 partido = {
-                    "Categoria": categoria, "Ronda": 1, "Partido_ID": pid,
-                    "Competidor1": n1, "Dojo1": d1,
-                    "Competidor2": n2, "Dojo2": d2,
+                    "Categoria": categoria, 
+                    "Ronda": 1, 
+                    "Partido_ID": pid,
+                    "Competidor1": n1, 
+                    "Dojo1": d1,
+                    "Competidor2": n2, 
+                    "Dojo2": d2,
                     "Ganador": winner,
-                    "Posicion": i // 2, "Total_Rondas": num_rondas
+                    "Posicion": i // 2, 
+                    "Total_Rondas": num_rondas
                 }
                 todos_partidos.append(partido)
                 pid += 1
@@ -184,11 +196,16 @@ def generar_brackets_dinamicos():
                 partidos_por_ronda = partidos_por_ronda // 2
                 for j in range(partidos_por_ronda):
                     partido = {
-                        "Categoria": categoria, "Ronda": ronda, "Partido_ID": pid,
-                        "Competidor1": "", "Dojo1": "",
-                        "Competidor2": "", "Dojo2": "",
+                        "Categoria": categoria, 
+                        "Ronda": ronda, 
+                        "Partido_ID": pid,
+                        "Competidor1": "", 
+                        "Dojo1": "",
+                        "Competidor2": "", 
+                        "Dojo2": "",
                         "Ganador": "",
-                        "Posicion": j, "Total_Rondas": num_rondas
+                        "Posicion": j, 
+                        "Total_Rondas": num_rondas
                     }
                     todos_partidos.append(partido)
                     pid += 1
@@ -196,125 +213,591 @@ def generar_brackets_dinamicos():
     if todos_partidos:
         df_brackets = pd.DataFrame(todos_partidos)
         if guardar_brackets(df_brackets):
-            mensaje = "✅ Brackets generados:\n"
+            mensaje = "✅ Brackets generados exitosamente\n\n"
             for cat, stats in stats_categorias.items():
-                mensaje += f"\n• {cat}: {stats['competidores']} luchadores"
+                mensaje += f"• **{cat}**: {stats['competidores']} competidores\n"
             return True, mensaje
     
-    return False, "No se generaron brackets"
+    return False, "No se pudieron generar los brackets"
 
-# === CSS (SIN COMILLAS TRIPLES) ===
-# Construimos el CSS linea por linea para evitar errores de parseo
-css = "<style>"
-css += "@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');"
-css += ".stApp { background: radial-gradient(circle at 50% 0%, #1a0505 0%, #0a0c10 100%); font-family: 'Rajdhani', sans-serif; }"
-css += "::-webkit-scrollbar { height: 10px; width: 10px; }"
-css += "::-webkit-scrollbar-track { background: #0a0c10; }"
-css += "::-webkit-scrollbar-thumb { background: #ff2b2b; border-radius: 5px; }"
-css += "h1, h2, h3 { font-family: 'Orbitron', sans-serif !important; color: white !important; text-shadow: 0 0 10px rgba(255, 43, 43, 0.5); }"
-css += ".logo-container { text-align: center; padding: 20px 0; }"
-css += ".logo-container img { width: min(350px, 80%); filter: drop-shadow(0 0 30px rgba(255, 43, 43, 0.4)); }"
-css += ".countdown-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 30px 0; }"
-css += ".countdown-item { background: linear-gradient(145deg, #1e2028, #14161e); border: 1px solid #333; border-radius: 15px; padding: 15px; text-align: center; }"
-css += ".countdown-number { font-family: 'Orbitron', monospace; font-size: clamp(1.5rem, 4vw, 2.5rem); color: #ff2b2b; font-weight: 900; }"
-css += ".glass-card { background: rgba(20, 22, 30, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); border-left: 4px solid #ff2b2b; border-radius: 16px; padding: 25px; margin: 20px 0; }"
-css += ".stButton > button { background: linear-gradient(90deg, #8b0000, #ff2b2b); color: white !important; font-family: 'Orbitron', sans-serif !important; border: none !important; border-radius: 8px !important; padding: 12px 24px !important; font-weight: 600 !important; width: 100%; }"
-css += "[data-testid='stMetricValue'] { font-family: 'Orbitron', monospace !important; color: #ff2b2b !important; font-size: 2rem !important; }"
-css += "</style>"
+# === CSS FUTURISTA PROFESIONAL ===
+css = """
+<style>
+    /* Importar fuentes */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Space+Grotesk:wght@300;400;600;700&display=swap');
+    
+    /* Reset y base */
+    .stApp {
+        background: #0a0a0f;
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* Scrollbar personalizado */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #1a1a24;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #ff2b2b;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #ff5555;
+    }
+    
+    /* Header y logo */
+    .header-container {
+        text-align: center;
+        padding: 40px 20px;
+        position: relative;
+        overflow: hidden;
+    }
+    .header-container::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle at 30% 50%, rgba(255,43,43,0.03) 0%, transparent 50%);
+        animation: rotate 20s linear infinite;
+    }
+    @keyframes rotate {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+    .logo-img {
+        width: min(400px, 80%);
+        filter: drop-shadow(0 0 40px rgba(255,43,43,0.3));
+        transition: transform 0.5s;
+    }
+    .logo-img:hover {
+        transform: scale(1.02);
+    }
+    .title-main {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: clamp(2rem, 5vw, 3.5rem);
+        font-weight: 800;
+        background: linear-gradient(135deg, #fff, #ff8a8a);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 20px 0 10px;
+        letter-spacing: 2px;
+    }
+    .subtitle {
+        color: rgba(255,255,255,0.5);
+        font-size: 0.9rem;
+        letter-spacing: 4px;
+        text-transform: uppercase;
+    }
+    
+    /* Countdown grid */
+    .countdown-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 0 20px;
+    }
+    .countdown-item {
+        background: linear-gradient(145deg, #12121a, #1a1a24);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 20px;
+        padding: 20px;
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s;
+    }
+    .countdown-item::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, #ff2b2b, transparent);
+    }
+    .countdown-item:hover {
+        transform: translateY(-5px);
+        border-color: rgba(255,43,43,0.3);
+        box-shadow: 0 10px 30px rgba(255,43,43,0.1);
+    }
+    .countdown-number {
+        font-family: 'Space Grotesk', monospace;
+        font-size: clamp(2rem, 5vw, 3rem);
+        font-weight: 800;
+        color: #ff2b2b;
+        line-height: 1;
+        margin-bottom: 5px;
+        text-shadow: 0 0 20px rgba(255,43,43,0.3);
+    }
+    .countdown-label {
+        color: rgba(255,255,255,0.5);
+        font-size: 0.8rem;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+    }
+    
+    /* Cards de contenido */
+    .glass-card {
+        background: rgba(18, 18, 26, 0.7);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.03);
+        border-radius: 24px;
+        padding: 30px;
+        margin: 20px 0;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        transition: all 0.3s;
+    }
+    .glass-card:hover {
+        border-color: rgba(255,43,43,0.2);
+        box-shadow: 0 30px 60px rgba(255,43,43,0.15);
+    }
+    
+    /* Métricas */
+    .metric-container {
+        background: linear-gradient(145deg, #12121a, #0a0a0f);
+        border-radius: 20px;
+        padding: 25px;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.05);
+        transition: all 0.3s;
+    }
+    .metric-container:hover {
+        border-color: #ff2b2b;
+        transform: translateY(-5px);
+    }
+    .metric-label {
+        color: rgba(255,255,255,0.5);
+        font-size: 0.8rem;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
+    .metric-value {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: #ff2b2b;
+        text-shadow: 0 0 30px rgba(255,43,43,0.3);
+    }
+    
+    /* Tabs personalizadas */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: rgba(18, 18, 26, 0.5);
+        backdrop-filter: blur(10px);
+        padding: 8px;
+        border-radius: 50px;
+        border: 1px solid rgba(255,255,255,0.03);
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 40px;
+        padding: 10px 24px;
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        font-size: 0.9rem;
+        letter-spacing: 1px;
+        transition: all 0.3s;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #ff2b2b, #ff5555) !important;
+        color: white !important;
+    }
+    
+    /* Formulario */
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div > div,
+    .stNumberInput > div > div > input {
+        background: rgba(18, 18, 26, 0.8) !important;
+        border: 1px solid rgba(255,255,255,0.05) !important;
+        border-radius: 12px !important;
+        color: white !important;
+        font-family: 'Inter', sans-serif !important;
+        transition: all 0.3s !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stSelectbox > div > div > div:focus,
+    .stNumberInput > div > div > input:focus {
+        border-color: #ff2b2b !important;
+        box-shadow: 0 0 0 2px rgba(255,43,43,0.2) !important;
+    }
+    
+    /* Botones */
+    .stButton > button {
+        background: linear-gradient(135deg, #ff2b2b, #ff5555) !important;
+        color: white !important;
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+        letter-spacing: 1px !important;
+        padding: 12px 24px !important;
+        border: none !important;
+        border-radius: 12px !important;
+        width: 100%;
+        transition: all 0.3s !important;
+        text-transform: uppercase !important;
+        box-shadow: 0 10px 20px rgba(255,43,43,0.2) !important;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 15px 30px rgba(255,43,43,0.3) !important;
+    }
+    
+    /* Admin button especial */
+    .admin-button > button {
+        background: linear-gradient(135deg, #ff8c00, #ff2b2b) !important;
+    }
+    
+    /* Dividers */
+    hr {
+        border: none;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,43,43,0.3), transparent);
+        margin: 30px 0;
+    }
+    
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background: rgba(18, 18, 26, 0.5) !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(255,255,255,0.05) !important;
+        font-family: 'Inter', sans-serif !important;
+    }
+    
+    /* Dataframes */
+    .stDataFrame {
+        background: rgba(18, 18, 26, 0.5) !important;
+        border-radius: 16px !important;
+        border: 1px solid rgba(255,255,255,0.05) !important;
+        padding: 5px;
+    }
+    
+    /* Mensajes */
+    .stSuccess {
+        background: rgba(0,255,0,0.1) !important;
+        border-left-color: #00ff00 !important;
+        color: white !important;
+        border-radius: 8px !important;
+    }
+    .stError {
+        background: rgba(255,0,0,0.1) !important;
+        border-left-color: #ff2b2b !important;
+        color: white !important;
+        border-radius: 8px !important;
+    }
+    .stInfo {
+        background: rgba(255,255,255,0.05) !important;
+        border-left-color: #ff2b2b !important;
+        color: white !important;
+        border-radius: 8px !important;
+    }
+    
+    /* Footer */
+    .footer {
+        text-align: center;
+        color: rgba(255,255,255,0.3);
+        padding: 40px 0 20px;
+        font-size: 0.8rem;
+        letter-spacing: 1px;
+        border-top: 1px solid rgba(255,255,255,0.03);
+        margin-top: 60px;
+    }
+    
+    /* Brackets styling */
+    .bracket-container {
+        background: rgba(18, 18, 26, 0.5);
+        backdrop-filter: blur(10px);
+        border-radius: 24px;
+        padding: 30px;
+        margin: 20px 0;
+        overflow-x: auto;
+    }
+    .bracket-round {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        min-width: 300px;
+    }
+    .bracket-round-title {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #ff2b2b;
+        text-align: center;
+        padding-bottom: 10px;
+        border-bottom: 2px solid rgba(255,43,43,0.3);
+        margin-bottom: 20px;
+    }
+    .bracket-match {
+        background: linear-gradient(145deg, #12121a, #1a1a24);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 12px;
+        padding: 15px;
+        position: relative;
+        transition: all 0.3s;
+    }
+    .bracket-match:hover {
+        border-color: #ff2b2b;
+        transform: scale(1.02);
+    }
+    .bracket-competitor {
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin: 5px 0;
+        font-size: 0.9rem;
+    }
+    .bracket-competitor.red {
+        border-left: 4px solid #ff2b2b;
+    }
+    .bracket-competitor.blue {
+        border-left: 4px solid #1e90ff;
+    }
+    .bracket-competitor.winner {
+        background: rgba(255,215,0,0.1);
+        border-left-color: gold;
+    }
+    .bracket-dojo {
+        font-size: 0.7rem;
+        color: rgba(255,255,255,0.3);
+    }
+    .bracket-id {
+        position: absolute;
+        top: -8px;
+        right: 10px;
+        background: #ff2b2b;
+        color: white;
+        font-size: 0.6rem;
+        padding: 2px 8px;
+        border-radius: 20px;
+        font-weight: 600;
+    }
+    .bracket-bye {
+        background: rgba(255,215,0,0.1);
+        color: gold;
+        font-size: 0.7rem;
+        padding: 2px 8px;
+        border-radius: 20px;
+        display: inline-block;
+        margin-top: 5px;
+    }
+    
+    /* Leyenda */
+    .legend {
+        display: flex;
+        gap: 30px;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin: 30px 0;
+        padding: 20px;
+        background: rgba(18, 18, 26, 0.3);
+        border-radius: 50px;
+        border: 1px solid rgba(255,255,255,0.03);
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: rgba(255,255,255,0.7);
+        font-size: 0.8rem;
+    }
+    .legend-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+    }
+    .legend-color.red { background: #ff2b2b; }
+    .legend-color.blue { background: #1e90ff; }
+    .legend-color.gold { background: gold; }
+    .legend-color.bye { background: gold; opacity: 0.3; }
+</style>
+"""
 st.markdown(css, unsafe_allow_html=True)
 
 # === HEADER ===
-col1, col2, col3 = st.columns([1,2,1])
+col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.markdown(f"""
-    <div class="logo-container">
-        <img src="{LOGO_URL}">
-        <h1>WORLD CUP 2026</h1>
-        <p style="color:#888;">SANTIAGO · CHILE · ABRIL 2026</p>
+    <div class="header-container">
+        <img src="{LOGO_URL}" class="logo-img">
+        <div class="title-main">WORLD CUP 2026</div>
+        <div class="subtitle">SANTIAGO · CHILE</div>
     </div>
     """, unsafe_allow_html=True)
 
+# === COUNTDOWN ===
 dias, horas, minutos, segundos = tiempo_restante()
 st.markdown(f"""
 <div class="countdown-grid">
-    <div class="countdown-item"><div class="countdown-number">{dias}</div><div>DÍAS</div></div>
-    <div class="countdown-item"><div class="countdown-number">{horas}</div><div>HORAS</div></div>
-    <div class="countdown-item"><div class="countdown-number">{minutos}</div><div>MINUTOS</div></div>
-    <div class="countdown-item"><div class="countdown-number">{segundos}</div><div>SEGUNDOS</div></div>
+    <div class="countdown-item">
+        <div class="countdown-number">{dias}</div>
+        <div class="countdown-label">DÍAS</div>
+    </div>
+    <div class="countdown-item">
+        <div class="countdown-number">{horas}</div>
+        <div class="countdown-label">HORAS</div>
+    </div>
+    <div class="countdown-item">
+        <div class="countdown-number">{minutos}</div>
+        <div class="countdown-label">MINUTOS</div>
+    </div>
+    <div class="countdown-item">
+        <div class="countdown-number">{segundos}</div>
+        <div class="countdown-label">SEGUNDOS</div>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
 # === TABS ===
-tab1, tab2, tab3, tab4 = st.tabs(["📊 DASHBOARD", "📝 INSCRIPCIÓN", "🏆 BRACKETS", "⚙️ ADMIN"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 DASHBOARD", "📝 INSCRIPCIÓN", "🏆 BRACKETS", "⚡ ADMIN"])
 
 # ========== TAB 1: DASHBOARD ==========
 with tab1:
-    st.markdown("## 📊 PANEL DE CONTROL")
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    
     df = leer_inscripciones()
     
     if not df.empty:
         df_conf = df[df['Estado'] == 'CONFIRMADO']
         
+        # Métricas
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("INSCRITOS", len(df_conf))
-        col2.metric("CATEGORÍAS", df_conf['Categoria'].nunique())
-        col3.metric("DOJOS", df_conf['Dojo'].nunique())
-        col4.metric("CUPOS", 500 - len(df_conf))
         
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        with col1:
+            st.markdown("""
+            <div class="metric-container">
+                <div class="metric-label">INSCRITOS</div>
+                <div class="metric-value">{}</div>
+            </div>
+            """.format(len(df_conf)), unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div class="metric-container">
+                <div class="metric-label">CATEGORÍAS</div>
+                <div class="metric-value">{}</div>
+            </div>
+            """.format(df_conf['Categoria'].nunique()), unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("""
+            <div class="metric-container">
+                <div class="metric-label">DOJOS</div>
+                <div class="metric-value">{}</div>
+            </div>
+            """.format(df_conf['Dojo'].nunique()), unsafe_allow_html=True)
+        
+        with col4:
+            cupos_restantes = 500 - len(df_conf)
+            st.markdown("""
+            <div class="metric-container">
+                <div class="metric-label">CUPOS</div>
+                <div class="metric-value">{}</div>
+            </div>
+            """.format(cupos_restantes), unsafe_allow_html=True)
+        
+        st.markdown("<hr>", unsafe_allow_html=True)
+        
+        # Gráfico de distribución
         counts = df_conf['Categoria'].value_counts().sort_values()
-        fig = px.bar(
-            x=counts.values,
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
             y=counts.index,
+            x=counts.values,
             orientation='h',
-            color=counts.values,
-            color_continuous_scale=['#440000', '#ff2b2b']
-        )
+            marker=dict(
+                color=counts.values,
+                colorscale=[[0, '#440000'], [1, '#ff2b2b']],
+                showscale=False,
+                line=dict(color='white', width=1)
+            ),
+            text=counts.values,
+            textposition='outside',
+            textfont=dict(color='white')
+        ))
+        
         fig.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='white'),
-            height=450
+            font=dict(color='white', family='Inter'),
+            height=500,
+            margin=dict(l=0, r=0, t=30, b=0),
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.05)',
+                title="Número de Inscritos",
+                title_font=dict(color='rgba(255,255,255,0.5)')
+            ),
+            yaxis=dict(
+                showgrid=False,
+                title_font=dict(color='rgba(255,255,255,0.5)')
+            )
         )
+        
         st.plotly_chart(fig, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        
     else:
-        st.info("📌 No hay inscripciones")
+        st.info("📌 No hay inscripciones registradas")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ========== TAB 2: INSCRIPCIÓN ==========
 with tab2:
-    st.markdown("## 📝 FORMULARIO DE INSCRIPCIÓN")
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("### 📝 Formulario de Inscripción")
     
     with st.form("form_inscripcion"):
         col1, col2 = st.columns(2)
+        
         with col1:
             nombre = st.text_input("Nombre Completo *")
             email = st.text_input("Email *")
             telefono = st.text_input("Teléfono *")
+        
         with col2:
             edad = st.number_input("Edad *", 18, 99, 25)
             dojo = st.text_input("Dojo *")
             pais = st.selectbox("País", PAISES)
         
         categoria = st.selectbox("Categoría *", CATEGORIAS)
-        st.markdown(f"**Valor:** {formatear_peso(PRECIO)} CLP")
         
-        metodo_pago = st.radio("Método de pago", ["Código VIP", "Pagar después"])
+        st.markdown(f"### Valor: {formatear_peso(PRECIO)} CLP")
+        
+        metodo_pago = st.radio(
+            "Método de pago",
+            ["Código VIP", "Pagar después"],
+            horizontal=True
+        )
+        
         codigo_vip = ""
         if metodo_pago == "Código VIP":
             codigo_vip = st.text_input("Código VIP", type="password")
         
-        terminos = st.checkbox("Acepto términos y condiciones")
+        terminos = st.checkbox("Acepto los términos y condiciones del torneo")
         
-        if st.form_submit_button("INSCRIBIRSE"):
+        submitted = st.form_submit_button("INSCRIBIRSE")
+        
+        if submitted:
             errores = []
-            if not nombre or len(nombre.split()) < 2: errores.append("Nombre completo requerido")
-            if not email or not validar_email(email): errores.append("Email inválido")
-            if not telefono or len(telefono) < 8: errores.append("Teléfono inválido")
-            if not dojo: errores.append("Dojo requerido")
-            if not terminos: errores.append("Debes aceptar términos")
-            if metodo_pago == "Código VIP" and codigo_vip != CODIGO_VIP: errores.append("Código VIP inválido")
+            if not nombre or len(nombre.split()) < 2:
+                errores.append("Nombre completo requerido")
+            if not email or not validar_email(email):
+                errores.append("Email inválido")
+            if not telefono or len(telefono) < 8:
+                errores.append("Teléfono inválido")
+            if not dojo:
+                errores.append("Dojo requerido")
+            if not terminos:
+                errores.append("Debes aceptar los términos")
+            if metodo_pago == "Código VIP" and codigo_vip != CODIGO_VIP:
+                errores.append("Código VIP inválido")
             
             if not errores:
                 datos = {
@@ -328,63 +811,75 @@ with tab2:
                     'categoria': categoria,
                     'metodo': 'VIP' if metodo_pago == "Código VIP" else 'Pendiente'
                 }
+                
                 if guardar_inscripcion(datos):
                     st.balloons()
-                    st.success("✅ Inscripción exitosa!")
+                    st.success("✅ ¡Inscripción exitosa!")
+                    time.sleep(2)
                     st.rerun()
             else:
-                for e in errores:
-                    st.error(e)
+                for error in errores:
+                    st.error(error)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ========== TAB 3: BRACKETS (CORREGIDO) ==========
+# ========== TAB 3: BRACKETS ==========
 with tab3:
-    st.markdown("## 🏆 BRACKETS DEL TORNEO")
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("### 🏆 Brackets del Torneo")
     
-    col1, col2 = st.columns([3,1])
-    with col2:
-        if st.button("🔄 GENERAR LLAVES"):
-            with st.spinner("Calculando cruces..."):
-                resultado, mensaje = generar_brackets_dinamicos()
-                if resultado:
-                    st.success(mensaje)
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.warning(mensaje)
+    # Verificar si es admin (para mostrar botón de generar)
+    is_admin = False
+    with st.expander("🔐 Acceso Admin", expanded=False):
+        admin_pass = st.text_input("Contraseña Admin", type="password", key="admin_pass_brackets")
+        is_admin = verificar_admin(admin_pass)
     
+    # Botón de generar brackets (solo visible para admin)
+    if is_admin:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("⚡ GENERAR BRACKETS", use_container_width=True, key="gen_brackets"):
+                with st.spinner("Generando brackets..."):
+                    resultado, mensaje = generar_brackets_dinamicos()
+                    if resultado:
+                        st.success(mensaje)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning(mensaje)
+        st.markdown("<hr>", unsafe_allow_html=True)
+    
+    # Mostrar brackets
     df_brackets = leer_brackets()
     
     if not df_brackets.empty:
         categorias = df_brackets['Categoria'].unique()
-        cat_sel = st.selectbox("📂 Seleccionar categoría", categorias)
+        categoria_sel = st.selectbox("📂 Seleccionar Categoría", categorias)
         
-        df_cat = df_brackets[df_brackets['Categoria'] == cat_sel]
+        df_cat = df_brackets[df_brackets['Categoria'] == categoria_sel]
         
         if not df_cat.empty:
             total_rondas = int(df_cat['Total_Rondas'].iloc[0])
             rondas = sorted(df_cat['Ronda'].unique())
             
-            # --- CONSTRUCCIÓN SEGURA DEL HTML ---
-            # Usamos concatenación simple para evitar errores de sintaxis
-            
-            # Contenedor principal con Scroll Horizontal
-            html = "<div style='overflow-x: auto; margin: 20px 0; padding-bottom: 20px;'>"
-            html += "<div style='display: flex; flex-direction: row; gap: 40px; min-width: max-content; padding: 10px;'>"
+            # Construir HTML de brackets
+            html = '<div class="bracket-container"><div style="display: flex; gap: 40px; min-width: max-content;">'
             
             for ronda in rondas:
                 df_ronda = df_cat[df_cat['Ronda'] == ronda].sort_values('Posicion')
                 
-                # Titulo de ronda
-                if ronda == total_rondas: titulo = "🏆 FINAL"
-                elif ronda == total_rondas - 1: titulo = "🥈 SEMIFINAL"
-                elif ronda == total_rondas - 2: titulo = "🥉 CUARTOS"
-                else: titulo = "RONDA " + str(ronda)
+                # Título de ronda
+                if ronda == total_rondas:
+                    titulo = "🏆 FINAL"
+                elif ronda == total_rondas - 1:
+                    titulo = "🥈 SEMIFINAL"
+                elif ronda == total_rondas - 2:
+                    titulo = "🥉 CUARTOS"
+                else:
+                    titulo = f"RONDA {ronda}"
                 
-                # Columna de la ronda
-                html += "<div style='display: flex; flex-direction: column; justify-content: space-around; flex-shrink: 0; width: 280px; position: relative;'>"
-                html += "<div style='text-align: center; font-family: Orbitron; color: #ff2b2b; font-size: 1.2rem; font-weight: bold; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 2px solid #ff2b2b;'>" + titulo + "</div>"
+                html += f'<div class="bracket-round">'
+                html += f'<div class="bracket-round-title">{titulo}</div>'
                 
                 for _, p in df_ronda.iterrows():
                     # Datos seguros
@@ -395,82 +890,82 @@ with tab3:
                     d2 = str(p['Dojo2']) if p['Dojo2'] else ""
                     ganador = str(p['Ganador'])
                     
-                    # Estilos dinámicos
+                    # Determinar estilos
                     c1_win = (ganador == c1 and ganador != "" and ganador != "---")
                     c2_win = (ganador == c2 and ganador != "" and ganador != "---")
                     
-                    style1 = "background: rgba(255,215,0,0.15); border-left: 4px solid gold;" if c1_win else "border-left: 4px solid #ff2b2b;"
-                    style2 = "background: rgba(255,215,0,0.15); border-left: 4px solid gold;" if c2_win else "border-left: 4px solid #1e90ff;"
-                    
-                    name_style1 = "color:#ffd700; font-weight:bold;" if c1_win else "color:#fff;"
-                    name_style2 = "color:#ffd700; font-weight:bold;" if c2_win else "color:#fff;"
-                    
-                    # Elementos visuales
+                    # Bye badge
                     bye_badge = ""
-                    if c1 == "BYE" or c2 == "BYE":
-                        bye_badge = "<span style='position:absolute; top:-8px; left:5px; background:gold; color:black; font-size:0.6rem; padding:2px 6px; border-radius:10px; font-weight:bold;'>⭐ BYE</span>"
+                    if "BYE" in [c1, c2]:
+                        bye_badge = '<div class="bracket-bye">⭐ BYE</div>'
                     
-                    conector = ""
-                    if ronda < total_rondas:
-                        conector = "<div style='position:absolute; top:50%; right:-40px; width:40px; height:2px; background:linear-gradient(90deg, #555, #222);'></div>"
-                    
-                    # Construcción de la tarjeta
-                    html += "<div style='background: #14161e; border: 1px solid #444; border-radius: 6px; margin: 15px 0; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.5);'>"
-                    html += "<span style='position: absolute; top: -8px; right: 5px; background: #000; color: #666; font-size: 0.6rem; padding: 2px 6px; border: 1px solid #333; border-radius: 4px;'>#" + id_p + "</span>"
+                    html += f'<div class="bracket-match">'
+                    html += f'<span class="bracket-id">#{id_p}</span>'
                     html += bye_badge
-                    html += conector
                     
                     # Competidor 1
-                    html += "<div style='padding: 8px 12px; border-bottom: 1px solid #333; " + style1 + "'>"
-                    html += "<div><span style='font-size:0.9rem; " + name_style1 + "'>" + c1 + "</span></div>"
-                    html += "<div><span style='font-size:0.65rem; color:#888;'>" + d1 + "</span></div>"
-                    html += "</div>"
+                    html += f'<div class="bracket-competitor red{" winner" if c1_win else ""}">'
+                    html += f'<div style="font-weight: {"bold" if c1_win else "normal"}">{c1}</div>'
+                    if d1:
+                        html += f'<div class="bracket-dojo">{d1}</div>'
+                    html += '</div>'
                     
                     # Competidor 2
-                    html += "<div style='padding: 8px 12px; " + style2 + "'>"
-                    html += "<div><span style='font-size:0.9rem; " + name_style2 + "'>" + c2 + "</span></div>"
-                    html += "<div><span style='font-size:0.65rem; color:#888;'>" + d2 + "</span></div>"
-                    html += "</div>"
+                    html += f'<div class="bracket-competitor blue{" winner" if c2_win else ""}">'
+                    html += f'<div style="font-weight: {"bold" if c2_win else "normal"}">{c2}</div>'
+                    if d2:
+                        html += f'<div class="bracket-dojo">{d2}</div>'
+                    html += '</div>'
                     
-                    html += "</div>" # Fin tarjeta
+                    html += '</div>'  # Cierra bracket-match
                 
-                html += "</div>" # Fin columna
+                html += '</div>'  # Cierra bracket-round
             
-            html += "</div></div>" # Fin contenedor
+            html += '</div></div>'  # Cierra contenedores
             
-            # Renderizado final
             st.markdown(html, unsafe_allow_html=True)
             
             # Leyenda
             st.markdown("""
-            <div style="display:flex; gap:20px; justify-content:center; margin:20px 0; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px; flex-wrap: wrap;">
-                <span><span style="color:#ff2b2b;">█</span> Aka (Rojo)</span>
-                <span><span style="color:#1e90ff;">█</span> Ao (Azul)</span>
-                <span style="color:#ffd700;">🏆 Ganador</span>
-                <span style="color:gold;">⭐ BYE</span>
+            <div class="legend">
+                <div class="legend-item"><div class="legend-color red"></div> Aka (Rojo)</div>
+                <div class="legend-item"><div class="legend-color blue"></div> Ao (Azul)</div>
+                <div class="legend-item"><div class="legend-color gold"></div> Ganador</div>
+                <div class="legend-item"><div class="legend-color bye"></div> BYE</div>
             </div>
             """, unsafe_allow_html=True)
+    
     else:
-        st.info("📌 No hay brackets generados.")
+        st.info("📌 No hay brackets generados")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ========== TAB 4: ADMIN ==========
 with tab4:
-    st.markdown("## ⚙️ ADMIN")
-    password = st.text_input("Contraseña", type="password")
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("### ⚡ Panel de Administración")
+    
+    password = st.text_input("Contraseña", type="password", key="admin_pass_main")
     
     if verificar_admin(password):
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        tabs_admin = st.tabs(["📋 Inscripciones", "🏆 Brackets", "📊 Estadísticas"])
         
-        tabs = st.tabs(["📋 INSCRIPCIONES", "🏆 BRACKETS", "📊 ESTADÍSTICAS"])
-        
-        with tabs[0]:
+        with tabs_admin[0]:
             df_admin = leer_inscripciones()
             if not df_admin.empty:
                 st.dataframe(df_admin, use_container_width=True, hide_index=True)
                 csv = df_admin.to_csv(index=False)
-                st.download_button("📥 DESCARGAR CSV", csv, "inscripciones.csv")
+                st.download_button(
+                    "📥 DESCARGAR CSV",
+                    csv,
+                    "inscripciones.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.info("No hay inscripciones")
         
-        with tabs[1]:
+        with tabs_admin[1]:
             df_b = leer_brackets()
             if not df_b.empty:
                 st.dataframe(df_b, use_container_width=True, hide_index=True)
@@ -489,42 +984,72 @@ with tab4:
                         c2 = df_partido['Competidor2']
                         
                         if c1 and c2 and c1 != "BYE" and c2 != "BYE":
-                            ganador = st.radio("Seleccionar Ganador", [c1, c2], index=None)
+                            ganador = st.radio("Ganador", [c1, c2], index=None)
                             
-                            if st.form_submit_button("GUARDAR RESULTADO"):
+                            if st.form_submit_button("GUARDAR"):
                                 if ganador:
-                                    df_b.loc[(df_b['Categoria'] == cat_b) & (df_b['Partido_ID'] == partido_id), 'Ganador'] = ganador
-                                    guardar_brackets(df_b)
-                                    st.success(f"✅ Ganador actualizado: {ganador}")
-                                    st.rerun()
+                                    df_b.loc[(df_b['Categoria'] == cat_b) & 
+                                            (df_b['Partido_ID'] == partido_id), 'Ganador'] = ganador
+                                    if guardar_brackets(df_b):
+                                        st.success(f"✅ Ganador: {ganador}")
+                                        st.rerun()
                                 else:
                                     st.error("Selecciona un ganador")
                         else:
-                            st.info("Este partido no requiere gestión manual (BYE o Vacío).")
+                            st.info("Partido con BYE o vacío")
                 
-                if st.button("⚠️ BORRAR Y REGENERAR TODO"):
+                if st.button("⚠️ REINICIAR BRACKETS", use_container_width=True):
                     df_vacio = pd.DataFrame(columns=df_b.columns)
-                    guardar_brackets(df_vacio)
-                    st.warning("Brackets reiniciados. Ve a la pestaña Brackets para generar nuevos.")
-                    st.rerun()
+                    if guardar_brackets(df_vacio):
+                        st.warning("Brackets reiniciados")
+                        st.rerun()
+            
+            else:
+                st.info("No hay brackets generados")
         
-        with tabs[2]:
+        with tabs_admin[2]:
             df_stats = leer_inscripciones()
             if not df_stats.empty:
                 df_conf = df_stats[df_stats['Estado'] == 'CONFIRMADO']
+                
                 col1, col2, col3 = st.columns(3)
+                
                 total = len(df_conf[df_conf['Metodo'] != 'VIP']) * PRECIO
-                col1.metric("Ingresos Estimados", formatear_peso(total))
-                col2.metric("Inscritos VIP", len(df_stats[df_stats['Metodo'] == 'VIP']))
-                col3.metric("Pendientes Pago", len(df_stats[df_stats['Metodo'] == 'Pendiente']))
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+                
+                with col1:
+                    st.markdown(f"""
+                    <div class="metric-container">
+                        <div class="metric-label">INGRESOS</div>
+                        <div class="metric-value">{formatear_peso(total)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    vip_count = len(df_stats[df_stats['Metodo'] == 'VIP'])
+                    st.markdown(f"""
+                    <div class="metric-container">
+                        <div class="metric-label">VIP</div>
+                        <div class="metric-value">{vip_count}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col3:
+                    pendientes = len(df_stats[df_stats['Metodo'] == 'Pendiente'])
+                    st.markdown(f"""
+                    <div class="metric-container">
+                        <div class="metric-label">PENDIENTES</div>
+                        <div class="metric-value">{pendientes}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+    
     elif password:
         st.error("❌ Contraseña incorrecta")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # === FOOTER ===
 st.markdown("""
-<div style="text-align:center; color:#666; padding:30px 0; border-top:1px solid #333;">
-    <p>© 2024 World Kyokushin Budokai Chile</p>
+<div class="footer">
+    <p>© 2024 World Kyokushin Budokai Chile · Todos los derechos reservados</p>
 </div>
 """, unsafe_allow_html=True)
