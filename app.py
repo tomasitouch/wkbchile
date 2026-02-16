@@ -218,7 +218,7 @@ def render_header():
         <div class="logo-container">
             <img src='{LOGO_URL}'> 
             <div class='main-title'>WKB CHILE <span style='color:#ff2b2b'>2026</span></div>
-            <p style='color: #888; letter-spacing: 2px;'>WORLD CUP TOURNAMENT REGISTRATION</p>
+            <p style='color: #888; letter-spacing: 2px;'>ALL AMERICAN TOURNAMENT REGISTRATION</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -412,4 +412,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
