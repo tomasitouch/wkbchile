@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import mercadopago
+import plotly.express as px
+import plotly.graph_objects as go
 import uuid
 import re
 import time
@@ -9,59 +11,70 @@ from datetime import datetime
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Inscripción Oficial WKB 2025",
+    page_title="WKB World Cup 2026",
     page_icon="🥋",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# --- CSS PERSONALIZADO (Estética Profesional) ---
+# --- ESTILOS CSS PROFESIONALES ---
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
+    /* Importar fuente moderna */
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&family=Roboto:wght@300;400&display=swap');
+
+    h1, h2, h3 { font-family: 'Oswald', sans-serif; text-transform: uppercase; }
+    p, div, span { font-family: 'Roboto', sans-serif; }
+
+    /* Fondo y contenedores */
+    .stApp { background-color: #f8f9fa; }
     
-    html, body, [class*="css"] {
-        font-family: 'Roboto', sans-serif;
+    /* Logo Header */
+    .logo-container { text-align: center; margin-bottom: 20px; }
+    .logo-img { max-width: 150px; }
+
+    /* Cuenta Regresiva */
+    .countdown-box {
+        background: linear-gradient(135deg, #1a1a1a 0%, #333333 100%);
+        color: #d4af37; /* Dorado */
+        padding: 20px;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 30px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        border: 2px solid #d4af37;
     }
-    
+    .countdown-time { font-size: 2.5rem; font-weight: bold; font-family: 'Oswald'; }
+    .countdown-label { font-size: 1rem; color: #fff; letter-spacing: 2px; }
+
+    /* Tarjetas de Métricas */
+    div[data-testid="stMetric"] {
+        background-color: white;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        border-left: 5px solid #d00000; /* Rojo Kyokushin */
+    }
+
+    /* Botón Principal */
     .stButton>button {
-        background-color: #00A650; /* Verde MercadoPago */
+        background-color: #d00000;
         color: white;
-        border-radius: 8px;
-        height: 50px;
+        border-radius: 30px;
         font-weight: bold;
-        font-size: 18px;
         border: none;
-        width: 100%;
-        transition: all 0.3s ease;
+        transition: 0.3s;
     }
     .stButton>button:hover {
-        background-color: #008f45;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-    }
-    
-    .header-style {
-        font-size: 24px;
-        font-weight: 700;
-        color: #333;
-        margin-bottom: 20px;
-        border-bottom: 2px solid #E6E6E6;
-        padding-bottom: 10px;
-    }
-    
-    .success-box {
-        padding: 20px;
-        background-color: #D4EDDA;
-        color: #155724;
-        border-radius: 10px;
-        border: 1px solid #C3E6CB;
-        text-align: center;
-        margin-bottom: 20px;
+        background-color: #a00000;
+        box-shadow: 0 5px 15px rgba(208,0,0,0.4);
     }
     </style>
 """, unsafe_allow_html=True)
 
 # --- CONSTANTES ---
+LOGO_URL = "https://www.worldkyokushinbudokai.com/assets/custom/img/logo.png"
+FECHA_TORNEO = datetime(2026, 4, 24, 9, 0, 0)
 PRECIO = 15000
 CATEGORIAS = [
     "KUMITE -65kg (18+)", "KUMITE -70kg (18+)", "KUMITE -75kg (18+)",
@@ -70,256 +83,227 @@ CATEGORIAS = [
     "KUMITE +65kg (18+) Femenino", "KATA (18+) Mixto"
 ]
 
-# --- GESTIÓN DE ESTADO ---
-if 'user_data' not in st.session_state:
-    st.session_state.user_data = {}
-if 'step' not in st.session_state:
-    st.session_state.step = 1
+# --- FUNCIONES DE DATOS Y LÓGICA ---
 
-# --- FUNCIONES BACKEND ---
-
-def get_db_connection():
-    """Conexión a Google Sheets"""
-    return st.connection("gsheets", type=GSheetsConnection)
-
-def get_all_registrations():
-    """Obtiene todos los registros actuales"""
-    conn = get_db_connection()
+def get_data():
+    conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        return conn.read(worksheet="Inscripciones", ttl=0) # ttl=0 para datos frescos
+        return conn.read(worksheet="Inscripciones", ttl=0)
     except:
-        return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Dojo", "Categoria", "Estado", "Metodo", "Payment_ID"])
+        return pd.DataFrame(columns=["ID", "Nombre", "Categoria", "Dojo", "Estado", "Fecha"])
 
-def save_registration(data, payment_id="MANUAL"):
-    """Guarda una nueva inscripción en Sheets"""
-    conn = get_db_connection()
+def guardar_inscripcion(datos, metodo_pago="MercadoPago"):
+    conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        df_existente = get_all_registrations()
-        
-        # Verificar si el ID ya existe para evitar duplicados al refrescar
-        if not df_existente.empty and data['id'] in df_existente['ID'].values:
-            return True # Ya existe, tratamos como éxito
-
-        nueva_fila = {
-            "ID": data['id'],
-            "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Nombre": data['nombre'],
-            "Email": data['email'],
-            "Dojo": data['dojo'],
-            "Categoria": data['categoria'],
-            "Telefono": data['telefono'],
-            "Edad": data['edad'],
+        df_existente = get_data()
+        nueva_fila = pd.DataFrame([{
+            "ID": datos['id'],
+            "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "Nombre": datos['nombre'],
+            "Email": datos['email'],
+            "Dojo": datos['dojo'],
+            "Categoria": datos['categoria'],
+            "Telefono": datos['telefono'],
+            "Edad": datos['edad'],
             "Estado": "CONFIRMADO",
-            "Metodo": "MercadoPago" if payment_id != "MANUAL" else "Manual/Admin",
-            "Payment_ID": payment_id
-        }
-        
-        df_nueva = pd.DataFrame([nueva_fila])
-        df_final = pd.concat([df_existente, df_nueva], ignore_index=True)
+            "Metodo": metodo_pago
+        }])
+        df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
         conn.update(worksheet="Inscripciones", data=df_final)
         return True
     except Exception as e:
-        st.error(f"Error guardando datos: {e}")
+        st.error(f"Error técnico: {e}")
         return False
 
-def create_mercadopago_preference(user_data):
-    """Genera el link de pago"""
+def crear_link_mp(datos):
     try:
         sdk = mercadopago.SDK(st.secrets["mercadopago"]["access_token"])
-        
         base_url = st.secrets["general"]["public_url"]
-        
-        preference_data = {
-            "items": [
-                {
-                    "id": "INS-WKB-2025",
-                    "title": f"Inscripción Torneo WKB - {user_data['categoria']}",
-                    "quantity": 1,
-                    "currency_id": "CLP",
-                    "unit_price": float(PRECIO)
-                }
-            ],
-            "payer": {
-                "name": user_data['nombre'],
-                "email": user_data['email']
-            },
+        preference = {
+            "items": [{"title": f"WKB 2026 - {datos['categoria']}", "quantity": 1, "currency_id": "CLP", "unit_price": PRECIO}],
+            "payer": {"email": datos['email']},
             "back_urls": {
                 "success": f"{base_url}?status=approved",
-                "failure": f"{base_url}?status=failure",
-                "pending": f"{base_url}?status=pending"
+                "failure": f"{base_url}?status=failure"
             },
             "auto_return": "approved",
-            "external_reference": user_data['id'],
-            "statement_descriptor": "WKB CHILE"
+            "external_reference": datos['id']
         }
-        
-        preference_response = sdk.preference().create(preference_data)
-        return preference_response["response"]["init_point"]
-    except Exception as e:
-        st.error(f"Error conectando con MercadoPago: {e}")
+        res = sdk.preference().create(preference)
+        return res["response"]["init_point"]
+    except:
         return None
 
-def validar_form(nombre, email, dojo, telefono):
-    if not nombre or len(nombre) < 3: return False, "Nombre inválido"
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", email): return False, "Email inválido"
-    if not dojo: return False, "Falta el Dojo"
-    if not telefono: return False, "Falta teléfono"
-    return True, ""
+# --- COMPONENTES VISUALES ---
 
-# --- INTERFAZ DE USUARIO ---
-
-def show_header():
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        st.write("🥋") # Aquí podrías poner st.image("logo.png")
-    with col2:
-        st.title("WKB Chile | Inscripción 2025")
-        st.markdown("**Fecha:** 15-16 Marzo 2025 | **Lugar:** Polideportivo Santiago")
-
-def step_1_form():
-    st.markdown('<div class="header-style">1. Datos del Competidor</div>', unsafe_allow_html=True)
+def mostrar_header():
+    st.markdown(f"""
+        <div class='logo-container'>
+            <img src='{LOGO_URL}' class='logo-img'>
+            <h1>WKB CHILE WORLD CUP</h1>
+        </div>
+    """, unsafe_allow_html=True)
     
-    with st.container(border=True):
-        col1, col2 = st.columns(2)
-        
-        with col1:
+    # Lógica de Cuenta Regresiva
+    ahora = datetime.now()
+    restante = FECHA_TORNEO - ahora
+    dias = restante.days
+    horas, resto = divmod(restante.seconds, 3600)
+    minutos, _ = divmod(resto, 60)
+    
+    st.markdown(f"""
+        <div class='countdown-box'>
+            <div class='countdown-label'>FALTAN PARA EL GRAN DÍA</div>
+            <div class='countdown-time'>{dias}d : {horas}h : {minutos}m</div>
+            <div class='countdown-label'>24 ABRIL 2026</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+def dashboard_avanzado(df):
+    st.markdown("### 📊 Analytics del Torneo")
+    
+    if df.empty:
+        st.info("Esperando primeros registros para generar gráficos.")
+        return
+
+    # Filtro de datos confirmados
+    df = df[df['Estado'] == 'Confirmado'] if 'Estado' in df.columns else df
+
+    # KPIs
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Inscritos", len(df))
+    c2.metric("Dojos Presentes", df['Dojo'].nunique() if 'Dojo' in df.columns else 0)
+    c3.metric("Categorías Activas", df['Categoria'].nunique() if 'Categoria' in df.columns else 0)
+    c4.metric("Cupos Restantes", f"{500 - len(df)}")
+
+    # Gráfico 1: Inscritos por Categoría (Barras Horizontales Interactivas)
+    conteo_cat = df['Categoria'].value_counts().reset_index()
+    conteo_cat.columns = ['Categoría', 'Inscritos']
+    
+    fig_bar = px.bar(conteo_cat, x='Inscritos', y='Categoría', orientation='h',
+                     title="Competitividad por Categoría",
+                     text='Inscritos',
+                     color='Inscritos',
+                     color_continuous_scale=['#333333', '#d00000']) # Negro a Rojo
+    fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", font_family="Roboto")
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+    # Sección Premios (Podios)
+    st.markdown("### 🏆 Disputa por el Podio (1º, 2º, 3º Lugar)")
+    col_g1, col_g2 = st.columns([2, 1])
+    
+    with col_g1:
+        # Gráfico avanzado de Sunburst para ver distribución Dojo -> Categoría
+        if 'Dojo' in df.columns:
+            fig_sun = px.sunburst(df, path=['Categoria', 'Dojo'], 
+                                  title="Distribución de Fuerza (Categoría > Dojo)",
+                                  color_discrete_sequence=px.colors.qualitative.Dark24)
+            st.plotly_chart(fig_sun, use_container_width=True)
+
+    with col_g2:
+        # Tabla estilizada de premios
+        st.markdown("""
+        <div style="background:white; padding:20px; border-radius:10px; border:1px solid #ddd;">
+            <h4 style="color:#d4af37; text-align:center;">PREMIOS EN JUEGO</h4>
+            <ul style="list-style:none; padding:0;">
+                <li style="margin-bottom:10px;">🥇 <b>1er Lugar:</b> Copa Gran Campeón + Medalla Oro + Certificado</li>
+                <li style="margin-bottom:10px;">🥈 <b>2do Lugar:</b> Copa Finalista + Medalla Plata + Certificado</li>
+                <li style="margin-bottom:10px;">🥉 <b>3er Lugar:</b> Medalla Bronce + Certificado</li>
+            </ul>
+            <hr>
+            <p style="text-align:center; font-size:0.9rem; color:grey;">
+                Total de medallas a entregar: <b>30</b> (3 por categoría)
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def formulario_inscripcion():
+    st.markdown("### 📝 Ficha de Competidor")
+    with st.form("form_registro"):
+        c1, c2 = st.columns(2)
+        with c1:
             nombre = st.text_input("Nombre Completo")
-            email = st.text_input("Correo Electrónico")
-            telefono = st.text_input("Teléfono / WhatsApp")
-            
-        with col2:
-            edad = st.number_input("Edad", min_value=18, max_value=99, value=25)
-            dojo = st.text_input("Dojo / Escuela")
+            email = st.text_input("Email")
+            telefono = st.text_input("Teléfono")
+        with c2:
+            edad = st.number_input("Edad", 18, 99)
+            dojo = st.text_input("Dojo")
             categoria = st.selectbox("Categoría", CATEGORIAS)
-            
-        if st.button("CONTINUAR AL PAGO ➡️"):
-            valid, msg = validar_form(nombre, email, dojo, telefono)
-            if valid:
-                st.session_state.user_data = {
-                    "id": str(uuid.uuid4())[:12].upper(),
-                    "nombre": nombre,
-                    "email": email,
-                    "telefono": telefono,
-                    "edad": edad,
-                    "dojo": dojo,
-                    "categoria": categoria
+        
+        submitted = st.form_submit_button("IR AL PAGO", use_container_width=True)
+        
+        if submitted:
+            if nombre and email and dojo:
+                st.session_state.temp_data = {
+                    "id": str(uuid.uuid4())[:8].upper(),
+                    "nombre": nombre, "email": email, "telefono": telefono,
+                    "edad": edad, "dojo": dojo, "categoria": categoria
                 }
                 st.session_state.step = 2
                 st.rerun()
             else:
-                st.error(msg)
+                st.warning("Completa los campos obligatorios")
 
-def step_2_payment():
-    st.markdown('<div class="header-style">2. Confirmar y Pagar</div>', unsafe_allow_html=True)
+def pasarela_pago():
+    data = st.session_state.temp_data
+    st.success("✅ Datos Validados")
     
-    data = st.session_state.user_data
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.info("📋 **Resumen de Inscripción**")
-        st.write(f"**Atleta:** {data['nombre']}")
-        st.write(f"**Categoría:** {data['categoria']}")
-        st.write(f"**Dojo:** {data['dojo']}")
-        st.markdown(f"### Total: ${PRECIO:,.0f} CLP")
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.markdown(f"""
+        **Resumen:**
+        * Atleta: {data['nombre']}
+        * Categoría: {data['categoria']}
+        * Dojo: {data['dojo']}
         
-        if st.button("⬅️ Corregir datos"):
+        **Total a Pagar: ${PRECIO:,.0f}**
+        """)
+        if st.button("✏️ Editar"):
             st.session_state.step = 1
             st.rerun()
-
-    with col2:
-        st.write("Selecciona tu método de pago:")
-        
-        # Generar Link MP
-        mp_link = create_mercadopago_preference(data)
-        
-        if mp_link:
-            st.link_button("💳 PAGAR AHORA CON MERCADOPAGO", mp_link, use_container_width=True)
-            st.caption("Serás redirigido a Mercado Pago de forma segura. Al finalizar, volverás automáticamente aquí.")
-        else:
-            st.error("No se pudo generar el link de pago. Intenta más tarde.")
-
-def handle_return_url():
-    """Maneja el retorno desde MercadoPago"""
-    query_params = st.query_params
-    status = query_params.get("status", None)
-    
-    if status == "approved":
-        if 'user_data' in st.session_state and st.session_state.user_data:
-            data = st.session_state.user_data
             
-            with st.status("Procesando tu inscripción...", expanded=True) as status_box:
-                st.write("Verificando pago...")
-                time.sleep(1)
-                st.write("Registrando en base de datos...")
-                
-                payment_id = query_params.get("payment_id", "MP_UNKNOWN")
-                exito = save_registration(data, payment_id)
-                
-                if exito:
-                    status_box.update(label="¡Inscripción Exitosa!", state="complete", expanded=False)
-                    st.markdown(f"""
-                        <div class="success-box">
-                            <h1>✅ ¡Listo, {data['nombre']}!</h1>
-                            <p>Tu inscripción ha sido confirmada correctamente.</p>
-                            <p>ID de Registro: <strong>{data['id']}</strong></p>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    st.balloons()
-                    
-                    # Limpiar sesión para nueva inscripción
-                    if st.button("Realizar nueva inscripción"):
-                        st.session_state.user_data = {}
-                        st.session_state.step = 1
-                        st.query_params.clear()
-                        st.rerun()
-                else:
-                    st.error("Hubo un error guardando tu registro, pero el pago fue exitoso. Por favor contacta al administrador.")
+    with c2:
+        link = crear_link_mp(data)
+        if link:
+            st.link_button("💳 PAGAR CON MERCADO PAGO", link, use_container_width=True)
         else:
-            st.warning("Pago detectado, pero se perdió la sesión del formulario. Si recibiste el correo de MercadoPago, estás cubierto.")
-            
-    elif status == "failure":
-        st.error("❌ El pago fue rechazado o cancelado. Por favor intenta nuevamente.")
-        if st.button("Intentar de nuevo"):
-            st.query_params.clear()
-            st.rerun()
+            st.error("Error conectando con el sistema de pagos")
 
-def admin_panel():
-    st.title("Panel de Administración")
-    pwd = st.text_input("Contraseña de Admin", type="password")
-    
-    if pwd == st.secrets["general"].get("admin_password", "admin"):
-        df = get_all_registrations()
-        
-        st.metric("Total Inscritos", len(df))
-        st.metric("Recaudación Estimada", f"${len(df)*PRECIO:,.0f}")
-        
-        st.dataframe(df, use_container_width=True)
-        
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Descargar CSV", csv, "inscritos_wkb.csv", "text/csv")
-
-# --- MAIN APP FLOW ---
-
+# --- CONTROLADOR PRINCIPAL ---
 def main():
-    # Detectar si estamos en modo Admin (por URL o menú oculto)
-    menu = st.sidebar.selectbox("Navegación", ["Inscripción", "Admin"])
+    # Menú Lateral
+    menu = st.sidebar.radio("Navegación", ["🏠 Inicio & Stats", "📝 Inscribirse", "🔐 Admin"])
     
-    if menu == "Admin":
-        admin_panel()
-        return
-
-    # Flujo Normal de Inscripción
-    show_header()
+    # Manejo de retorno de MP
+    if "status" in st.query_params and st.query_params["status"] == "approved":
+        if 'temp_data' in st.session_state:
+            if guardar_inscripcion(st.session_state.temp_data):
+                st.balloons()
+                st.success("¡INSCRIPCIÓN ÉXITOSA! Nos vemos en el tatami.")
+                st.session_state.temp_data = {}
+                st.query_params.clear()
     
-    # Chequear si venimos volviendo de MercadoPago
-    if "status" in st.query_params:
-        handle_return_url()
-    else:
+    if menu == "🏠 Inicio & Stats":
+        mostrar_header()
+        df = get_data()
+        dashboard_avanzado(df)
+        
+    elif menu == "📝 Inscribirse":
+        mostrar_header()
+        if 'step' not in st.session_state: st.session_state.step = 1
+        
         if st.session_state.step == 1:
-            step_1_form()
-        elif st.session_state.step == 2:
-            step_2_payment()
+            formulario_inscripcion()
+        else:
+            pasarela_pago()
+            
+    elif menu == "🔐 Admin":
+        st.title("Panel Administrativo")
+        pwd = st.text_input("Contraseña", type="password")
+        if pwd == st.secrets["general"].get("admin_password", "admin"):
+            df = get_data()
+            st.dataframe(df)
+            st.download_button("Descargar Excel", df.to_csv(), "inscritos_2026.csv")
 
 if __name__ == "__main__":
     main()
