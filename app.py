@@ -390,6 +390,9 @@ def render_paso1():
     </div>
     """, unsafe_allow_html=True)
 
+
+
+
 def render_paso2():
     """Paso 2: Procesar pago"""
     
@@ -477,11 +480,13 @@ def render_paso2():
                 # Crear preferencia en MercadoPago
                 preferencia_id = f"WKB-{datos['id_inscripcion']}-{int(time.time())}"
                 
+                # CORRECCIÓN: Agregar 'dojo' al diccionario
                 datos_pago = {
                     "comprador": {
                         "nombre": datos["nombre"],
                         "email": datos["email"],
-                        "telefono": datos["telefono"]
+                        "telefono": datos["telefono"],
+                        "dojo": datos["dojo"]
                     },
                     "items": {
                         "categoria": datos["categoria"]
@@ -495,17 +500,14 @@ def render_paso2():
                     st.session_state.preferencia_id = preferencia_id
                     
                     # Mostrar link de pago
-                    st.markdown(f"""
-                    <div style="text-align: center; margin: 20px 0;">
-                        <a href="{preferencia['init_point']}" target="_blank">
-                            <button style="background: #00aaff; color: white; padding: 15px 30px; 
-                                         border: none; border-radius: 10px; font-size: 18px; 
-                                         font-weight: bold; cursor: pointer;">
-                                🔗 HAZ CLIC PARA PAGAR
-                            </button>
-                        </a>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    html_pago = '<div style="text-align: center; margin: 20px 0;">'
+                    html_pago += '<a href="' + preferencia['init_point'] + '" target="_blank">'
+                    html_pago += '<button style="background: #00aaff; color: white; padding: 15px 30px; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer;">'
+                    html_pago += '🔗 HAZ CLIC PARA PAGAR'
+                    html_pago += '</button>'
+                    html_pago += '</a>'
+                    html_pago += '</div>'
+                    st.markdown(html_pago, unsafe_allow_html=True)
                     
                     st.info("⚠️ Después de pagar, espera la confirmación automática")
                     
@@ -517,6 +519,12 @@ def render_paso2():
                     st.error("Error al crear el pago. Intenta nuevamente.")
     
     st.markdown('</div>', unsafe_allow_html=True)
+
+
+
+
+
+
 
 def render_paso3():
     """Paso 3: Confirmación exitosa"""
