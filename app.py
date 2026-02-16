@@ -169,11 +169,17 @@ def guardar_brackets(df):
         return False
 
 # === FUNCIONES DE MERCADO PAGO ===
+
+
+
 def crear_preferencia_pago(nombre, email, monto, descripcion, referencia):
     """
     Crea una preferencia de pago en Mercado Pago
     """
     try:
+        # URL BASE ACTUALIZADA
+        base_url = "https://wkbchile-br5ucwq5ptkox2fnxasjyp.streamlit.app"
+
         preference_data = {
             "items": [
                 {
@@ -189,9 +195,9 @@ def crear_preferencia_pago(nombre, email, monto, descripcion, referencia):
                 "email": email
             },
             "back_urls": {
-                "success": "https://wkbchile.streamlit.app/?success=true",
-                "failure": "https://wkbchile.streamlit.app/?failure=true",
-                "pending": "https://wkbchile.streamlit.app/?pending=true"
+                "success": f"{base_url}/?success=true",
+                "failure": f"{base_url}/?failure=true",
+                "pending": f"{base_url}/?pending=true"
             },
             "auto_return": "approved",
             "external_reference": referencia,
@@ -213,6 +219,8 @@ def crear_preferencia_pago(nombre, email, monto, descripcion, referencia):
     except Exception as e:
         st.error(f"Error creando preferencia de pago: {e}")
         return False, None
+
+
 
 def verificar_pago(external_reference):
     """
@@ -1480,3 +1488,4 @@ st.markdown("""
     <p>© 2024 World Kyokushin Budokai Chile · Todos los derechos reservados</p>
 </div>
 """, unsafe_allow_html=True)
+
