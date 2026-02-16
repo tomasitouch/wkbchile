@@ -4,8 +4,9 @@ from streamlit_gsheets import GSheetsConnection
 import plotly.express as px
 import hashlib
 import random
+import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
 
 # === CONFIGURACIÓN DE PÁGINA ===
@@ -108,13 +109,15 @@ def leer_brackets():
         if df.empty:
             return pd.DataFrame(columns=[
                 "Categoria", "Ronda", "Partido_ID", "Competidor1", "Dojo1",
-                "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", "Posicion"
+                "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", 
+                "Posicion", "Total_Rondas"
             ])
         return df
     except:
         return pd.DataFrame(columns=[
             "Categoria", "Ronda", "Partido_ID", "Competidor1", "Dojo1",
-            "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", "Posicion"
+            "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", 
+            "Posicion", "Total_Rondas"
         ])
 
 def guardar_brackets(df):
@@ -125,9 +128,9 @@ def guardar_brackets(df):
     except:
         return False
 
-# === GENERADOR DE BRACKETS ESTILO TORNEO ===
-def generar_brackets_torneo():
-    """Genera brackets con estructura de llaves horizontal"""
+# === GENERADOR DE BRACKETS DINÁMICOS ===
+def generar_brackets_dinamicos():
+    """Genera brackets con rondas exactas según cantidad de luchadores"""
     df = leer_inscripciones()
     
     if df.empty:
@@ -139,60 +142,101 @@ def generar_brackets_torneo():
         return False, "Se necesitan al menos 2 competidores"
     
     todos_partidos = []
+    stats_categorias = {}
     
     for categoria in CATEGORIAS:
         df_cat = df_conf[df_conf['Categoria'] == categoria]
+        num_competidores = len(df_cat)
         
-        if len(df_cat) >= 2:
+        if num_competidores >= 2:
             participantes = df_cat.to_dict('records')
             random.shuffle(participantes)
             
-            # Calcular número de rondas
-            num_part = len(participantes)
-            num_rondas = 1
-            while 2**num_rondas < num_part:
-                num_rondas += 1
+            # Calcular número exacto de rondas necesarias
+            num_rondas = math.ceil(math.log2(num_competidores))
+            capacidad_total = 2 ** num_rondas
             
-            # Crear primera ronda
+            # Guardar estadísticas
+            stats_categorias[categoria] = {
+                'competidores': num_competidores,
+                'rondas': num_rondas,
+                'capacidad': capacidad_total
+            }
+            
+            # Crear lista de competidores con byes si es necesario
+            competidores_lista = participantes.copy()
+            byes_necesarios = capacidad_total - num_competidores
+            
+            # Insertar byes al inicio para balancear
+            for i in range(byes_necesarios):
+                competidores_lista.insert(random.randint(0, len(competidores_lista)), None)
+            
+            # Generar primera ronda
             partido_id = 1
-            for i in range(0, num_part, 2):
-                if i+1 < num_part:
-                    # Partido normal
-                    partido = {
-                        "Categoria": categoria,
-                        "Ronda": 1,
-                        "Partido_ID": partido_id,
-                        "Competidor1": participantes[i]['Nombre'],
-                        "Dojo1": participantes[i].get('Dojo', ''),
-                        "Competidor2": participantes[i+1]['Nombre'],
-                        "Dojo2": participantes[i+1].get('Dojo', ''),
-                        "Ganador": "",
-                        "Siguiente_Partido": (partido_id + 1) // 2 if partido_id <= 2**(num_rondas-1) else "",
-                        "Posicion": i // 2
-                    }
+            for i in range(0, len(competidores_lista), 2):
+                if i + 1 < len(competidores_lista):
+                    c1 = competidores_lista[i]
+                    c2 = competidores_lista[i + 1]
+                    
+                    # Determinar si es BYE
+                    if c1 is None and c2 is not None:
+                        # BYE para c2
+                        partido = {
+                            "Categoria": categoria,
+                            "Ronda": 1,
+                            "Partido_ID": partido_id,
+                            "Competidor1": "BYE",
+                            "Dojo1": "-",
+                            "Competidor2": c2['Nombre'],
+                            "Dojo2": c2.get('Dojo', ''),
+                            "Ganador": c2['Nombre'],
+                            "Siguiente_Partido": ((partido_id - 1) // 2) + (capacidad_total // 2) + 1 if num_rondas > 1 else "",
+                            "Posicion": i // 2,
+                            "Total_Rondas": num_rondas
+                        }
+                    elif c2 is None and c1 is not None:
+                        # BYE para c1
+                        partido = {
+                            "Categoria": categoria,
+                            "Ronda": 1,
+                            "Partido_ID": partido_id,
+                            "Competidor1": c1['Nombre'],
+                            "Dojo1": c1.get('Dojo', ''),
+                            "Competidor2": "BYE",
+                            "Dojo2": "-",
+                            "Ganador": c1['Nombre'],
+                            "Siguiente_Partido": ((partido_id - 1) // 2) + (capacidad_total // 2) + 1 if num_rondas > 1 else "",
+                            "Posicion": i // 2,
+                            "Total_Rondas": num_rondas
+                        }
+                    elif c1 is not None and c2 is not None:
+                        # Partido normal
+                        partido = {
+                            "Categoria": categoria,
+                            "Ronda": 1,
+                            "Partido_ID": partido_id,
+                            "Competidor1": c1['Nombre'],
+                            "Dojo1": c1.get('Dojo', ''),
+                            "Competidor2": c2['Nombre'],
+                            "Dojo2": c2.get('Dojo', ''),
+                            "Ganador": "",
+                            "Siguiente_Partido": ((partido_id - 1) // 2) + (capacidad_total // 2) + 1 if num_rondas > 1 else "",
+                            "Posicion": i // 2,
+                            "Total_Rondas": num_rondas
+                        }
+                    else:
+                        continue
+                    
                     todos_partidos.append(partido)
-                else:
-                    # Bye - pasa directo
-                    partido = {
-                        "Categoria": categoria,
-                        "Ronda": 1,
-                        "Partido_ID": partido_id,
-                        "Competidor1": participantes[i]['Nombre'],
-                        "Dojo1": participantes[i].get('Dojo', ''),
-                        "Competidor2": "BYE",
-                        "Dojo2": "-",
-                        "Ganador": participantes[i]['Nombre'],
-                        "Siguiente_Partido": (partido_id + 1) // 2 if partido_id <= 2**(num_rondas-1) else "",
-                        "Posicion": i // 2
-                    }
-                    todos_partidos.append(partido)
-                partido_id += 1
+                    partido_id += 1
             
-            # Crear rondas superiores
-            partidos_ronda_actual = (num_part + 1) // 2
+            # Generar rondas superiores SOLO las necesarias
+            partidos_por_ronda = capacidad_total // 2
             for ronda in range(2, num_rondas + 1):
-                num_partidos_ronda = partidos_ronda_actual // 2
-                for j in range(num_partidos_ronda):
+                partidos_por_ronda = partidos_por_ronda // 2
+                for j in range(partidos_por_ronda):
+                    siguiente = ((partido_id - partidos_por_ronda - 1) // 2) + (partidos_por_ronda) if ronda < num_rondas else ""
+                    
                     partido = {
                         "Categoria": categoria,
                         "Ronda": ronda,
@@ -202,21 +246,25 @@ def generar_brackets_torneo():
                         "Competidor2": "",
                         "Dojo2": "",
                         "Ganador": "",
-                        "Siguiente_Partido": (partido_id - partidos_ronda_actual + 1) // 2 if ronda < num_rondas else "",
-                        "Posicion": j
+                        "Siguiente_Partido": siguiente,
+                        "Posicion": j,
+                        "Total_Rondas": num_rondas
                     }
                     todos_partidos.append(partido)
                     partido_id += 1
-                partidos_ronda_actual = num_partidos_ronda
     
     if todos_partidos:
         df_brackets = pd.DataFrame(todos_partidos)
         if guardar_brackets(df_brackets):
-            return True, f"✅ Brackets generados para {len(df_cat)} competidores"
+            # Mostrar estadísticas por categoría
+            mensaje = "✅ Brackets generados:\n"
+            for cat, stats in stats_categorias.items():
+                mensaje += f"\n• {cat}: {stats['competidores']} competidores - {stats['rondas']} rondas"
+            return True, mensaje
     
     return False, "No se generaron brackets"
 
-# === CSS PROFESIONAL CON BRACKETS HORIZONTALES ===
+# === CSS PROFESIONAL ===
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');
@@ -263,7 +311,7 @@ st.markdown("""
         font-weight: 900;
     }
     
-    /* BRACKETS HORIZONTALES - ESTILO TORNEO */
+    /* BRACKETS DINÁMICOS */
     .bracket-container {
         overflow-x: auto;
         padding: 20px 0;
@@ -294,6 +342,14 @@ st.markdown("""
         padding: 10px;
         border-bottom: 2px solid #ff2b2b;
         margin-bottom: 20px;
+    }
+    
+    .round-info {
+        text-align: center;
+        color: #888;
+        font-size: 0.8rem;
+        margin-top: -15px;
+        margin-bottom: 15px;
     }
     
     .match-card {
@@ -342,6 +398,11 @@ st.markdown("""
         background: rgba(255,215,0,0.1);
     }
     
+    .competitor-slot.bye {
+        border-left-color: gold;
+        background: rgba(255,215,0,0.05);
+    }
+    
     .competitor-name {
         font-weight: 600;
         color: white;
@@ -381,18 +442,13 @@ st.markdown("""
         font-weight: bold;
     }
     
-    /* RESPONSIVE */
-    @media (max-width: 768px) {
-        .bracket-row {
-            gap: 15px;
-        }
-        .round-column {
-            min-width: 220px;
-        }
-        .match-card {
-            min-width: 200px;
-            padding: 10px;
-        }
+    .bye-badge {
+        background: gold;
+        color: black;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-weight: bold;
+        font-size: 0.7rem;
     }
     
     /* GLASS CARD */
@@ -421,6 +477,29 @@ st.markdown("""
         font-family: 'Orbitron', monospace !important;
         color: #ff2b2b !important;
         font-size: 2rem !important;
+    }
+    
+    /* STATS CARD */
+    .stats-card {
+        background: rgba(255,43,43,0.1);
+        border: 1px solid #ff2b2b;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    .stats-title {
+        color: #ff2b2b;
+        font-weight: bold;
+    }
+    
+    @media (max-width: 768px) {
+        .round-column {
+            min-width: 220px;
+        }
+        .match-card {
+            min-width: 200px;
+            padding: 10px;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -549,19 +628,45 @@ with tab2:
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ========== TAB 3: BRACKETS HORIZONTALES ==========
+# ========== TAB 3: BRACKETS DINÁMICOS ==========
 with tab3:
     st.markdown("## 🏆 BRACKETS DEL TORNEO")
     
-    # Generar brackets
-    with st.spinner("Generando brackets..."):
-        resultado, mensaje = generar_brackets_torneo()
-        if resultado:
-            st.success(mensaje)
+    # Botón para generar brackets
+    col1, col2 = st.columns([3,1])
+    with col2:
+        if st.button("🔄 GENERAR BRACKETS", use_container_width=True):
+            with st.spinner("Generando brackets dinámicos..."):
+                resultado, mensaje = generar_brackets_dinamicos()
+                if resultado:
+                    st.success(mensaje)
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.warning(mensaje)
     
     df_brackets = leer_brackets()
     
     if not df_brackets.empty:
+        # Mostrar resumen por categoría
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown("### 📊 RESUMEN POR CATEGORÍA")
+        
+        categorias_resumen = df_brackets.groupby('Categoria').agg({
+            'Total_Rondas': 'first',
+            'Partido_ID': 'count'
+        }).reset_index()
+        categorias_resumen.columns = ['Categoría', 'Rondas', 'Total Partidos']
+        
+        for _, row in categorias_resumen.iterrows():
+            st.markdown(f"""
+            <div class="stats-card">
+                <span class="stats-title">{row['Categoría']}</span><br>
+                <span style="color:#888;">{row['Rondas']} rondas · {row['Total Partidos']} partidos</span>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
         # Selector de categoría
         categorias = df_brackets['Categoria'].unique()
         cat_sel = st.selectbox("Seleccionar categoría", categorias)
@@ -570,7 +675,17 @@ with tab3:
         df_cat = df_brackets[df_brackets['Categoria'] == cat_sel]
         
         if not df_cat.empty:
-            # Obtener rondas únicas
+            total_rondas = df_cat['Total_Rondas'].iloc[0]
+            
+            st.markdown(f"""
+            <div style="text-align:center; margin:20px 0;">
+                <span style="background:#ff2b2b; padding:5px 15px; border-radius:20px;">
+                    {total_rondas} RONDA{'' if total_rondas == 1 else 'S'} · {len(df_cat[df_cat['Ronda']==1])} COMBATES INICIALES
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Obtener rondas existentes (solo las que tienen partidos)
             rondas = sorted(df_cat['Ronda'].unique())
             
             # Contenedor con scroll horizontal
@@ -581,31 +696,46 @@ with tab3:
             for ronda in rondas:
                 df_ronda = df_cat[df_cat['Ronda'] == ronda].sort_values('Posicion')
                 
+                # Determinar nombre de la ronda
+                if ronda == total_rondas:
+                    nombre_ronda = "🏆 FINAL"
+                elif ronda == total_rondas - 1:
+                    nombre_ronda = "🥈 SEMIFINAL"
+                elif ronda == total_rondas - 2:
+                    nombre_ronda = "🥉 CUARTOS"
+                else:
+                    nombre_ronda = f"RONDA {ronda}"
+                
                 st.markdown(f'<div class="round-column">', unsafe_allow_html=True)
-                st.markdown(f'<div class="round-title">RONDA {ronda}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="round-title">{nombre_ronda}</div>', unsafe_allow_html=True)
                 
                 for _, partido in df_ronda.iterrows():
                     # Determinar si es BYE
-                    bye_class = "bye-match" if partido['Competidor2'] == "BYE" else ""
+                    bye_class = "bye-match" if partido['Competidor1'] == "BYE" or partido['Competidor2'] == "BYE" else ""
                     
                     # Verificar ganadores
                     winner1 = "winner" if partido['Ganador'] == partido['Competidor1'] else ""
                     winner2 = "winner" if partido['Ganador'] == partido['Competidor2'] else ""
                     
+                    # Clase especial para BYE
+                    bye1 = "bye" if partido['Competidor1'] == "BYE" else ""
+                    bye2 = "bye" if partido['Competidor2'] == "BYE" else ""
+                    
                     st.markdown(f"""
                     <div class="match-card {bye_class}">
-                        <div class="competitor-slot {winner1}">
+                        <div class="competitor-slot {winner1} {bye1}">
                             <span class="competitor-name">{partido['Competidor1'] or '---'}</span>
                             <span class="competitor-dojo">{partido['Dojo1']}</span>
                         </div>
                         <div class="vs-divider">⚔️ VS ⚔️</div>
-                        <div class="competitor-slot {winner2}">
+                        <div class="competitor-slot {winner2} {bye2}">
                             <span class="competitor-name">{partido['Competidor2'] or '---'}</span>
                             <span class="competitor-dojo">{partido['Dojo2']}</span>
                         </div>
                         <div class="match-info">
                             <span class="match-id">#{partido['Partido_ID']}</span>
-                            {f'<span class="winner-badge">🏆 {partido["Ganador"]}</span>' if partido['Ganador'] else ''}
+                            {f'<span class="winner-badge">🏆 {partido["Ganador"][:15]}...</span>' if partido['Ganador'] and len(partido['Ganador']) > 15 else f'<span class="winner-badge">🏆 {partido["Ganador"]}</span>' if partido['Ganador'] else ''}
+                            {f'<span class="bye-badge">⭐ BYE</span>' if partido['Competidor1'] == "BYE" or partido['Competidor2'] == "BYE" else ''}
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -614,16 +744,17 @@ with tab3:
             
             st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.info("No hay brackets para esta categoría")
+            
+            # Leyenda
+            st.markdown("""
+            <div style="display:flex; gap:20px; justify-content:center; margin:20px 0; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">
+                <span><span style="color:#ff2b2b;">⬤</span> Partido pendiente</span>
+                <span><span style="color:gold;">⬤</span> Ganador definido</span>
+                <span><span style="color:gold;">⭐</span> BYE (descansa)</span>
+            </div>
+            """, unsafe_allow_html=True)
     else:
-        st.info("No hay brackets generados")
-        if st.button("🔄 GENERAR BRACKETS AHORA"):
-            with st.spinner("Generando..."):
-                r, m = generar_brackets_torneo()
-                st.success(m)
-                time.sleep(1)
-                st.rerun()
+        st.info("📌 No hay brackets generados. Haz clic en 'GENERAR BRACKETS' para crear las llaves del torneo.")
 
 # ========== TAB 4: ADMIN ==========
 with tab4:
@@ -645,27 +776,34 @@ with tab4:
         with tabs[1]:
             df_b = leer_brackets()
             if not df_b.empty:
-                # Editor de ganadores
-                with st.form("edit_brackets"):
-                    partido_id = st.selectbox("Partido", df_b['Partido_ID'].unique())
-                    df_partido = df_b[df_b['Partido_ID'] == partido_id].iloc[0]
-                    
-                    if df_partido['Competidor2'] != "BYE":
-                        ganador = st.radio(
-                            "Ganador",
-                            [df_partido['Competidor1'], df_partido['Competidor2']]
-                        )
-                        
-                        if st.form_submit_button("ACTUALIZAR"):
-                            df_b.loc[df_b['Partido_ID'] == partido_id, 'Ganador'] = ganador
-                            guardar_brackets(df_b)
-                            st.success("✅ Actualizado")
-                            st.rerun()
+                st.dataframe(df_b, use_container_width=True, hide_index=True)
                 
-                if st.button("🔄 REGENERAR BRACKETS"):
+                # Editor de ganadores
+                with st.expander("Actualizar ganadores"):
+                    with st.form("edit_brackets"):
+                        partido_id = st.selectbox("Seleccionar partido", df_b['Partido_ID'].unique())
+                        df_partido = df_b[df_b['Partido_ID'] == partido_id].iloc[0]
+                        
+                        if df_partido['Competidor1'] != "BYE" and df_partido['Competidor2'] != "BYE":
+                            opciones = []
+                            if df_partido['Competidor1']:
+                                opciones.append(df_partido['Competidor1'])
+                            if df_partido['Competidor2']:
+                                opciones.append(df_partido['Competidor2'])
+                            
+                            if opciones:
+                                ganador = st.radio("Ganador", opciones)
+                                
+                                if st.form_submit_button("ACTUALIZAR"):
+                                    df_b.loc[df_b['Partido_ID'] == partido_id, 'Ganador'] = ganador
+                                    guardar_brackets(df_b)
+                                    st.success("✅ Actualizado")
+                                    st.rerun()
+                
+                if st.button("🔄 REGENERAR BRACKETS", use_container_width=True):
                     df_vacio = pd.DataFrame(columns=df_b.columns)
                     guardar_brackets(df_vacio)
-                    r, m = generar_brackets_torneo()
+                    r, m = generar_brackets_dinamicos()
                     st.success(m)
                     st.rerun()
         
@@ -689,6 +827,6 @@ with tab4:
 # === FOOTER ===
 st.markdown("""
 <div style="text-align:center; color:#666; padding:30px 0; border-top:1px solid #333;">
-    <p>© 2024 World Kyokushin Budokai Chile</p>
+    <p>© 2024 World Kyokushin Budokai Chile · Brackets Dinámicos</p>
 </div>
 """, unsafe_allow_html=True)
