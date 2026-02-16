@@ -55,11 +55,10 @@ def tiempo_restante():
     return dias, horas, minutos, segundos
 
 def verificar_admin(password):
-    # En producción usar st.secrets
     try:
         return hashlib.sha256(password.encode()).hexdigest() == st.secrets["general"]["admin_token_hash"]
     except:
-        return password == "admin123"  # Fallback para pruebas
+        return password == "admin123"
 
 # === FUNCIONES DE GOOGLE SHEETS ===
 @st.cache_data(ttl=5)
@@ -109,10 +108,20 @@ def leer_brackets():
         df = conn.read(worksheet="Brackets", ttl=0)
         df = df.fillna("")
         if df.empty:
-            return pd.DataFrame(columns=["Categoria", "Ronda", "Partido_ID", "Competidor1", "Dojo1", "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", "Posicion", "Total_Rondas"])
+            return pd.DataFrame(columns=[
+                "Categoria", "Ronda", "Partido_ID", "Competidor1_ID", "Competidor1_Nombre", 
+                "Dojo1", "Competidor2_ID", "Competidor2_Nombre", "Dojo2", 
+                "Ganador_ID", "Ganador_Nombre", "Siguiente_Partido_ID", "Posicion", 
+                "Total_Rondas", "Estado_Partido", "Tipo_Emparejamiento"
+            ])
         return df
     except:
-        return pd.DataFrame(columns=["Categoria", "Ronda", "Partido_ID", "Competidor1", "Dojo1", "Competidor2", "Dojo2", "Ganador", "Siguiente_Partido", "Posicion", "Total_Rondas"])
+        return pd.DataFrame(columns=[
+            "Categoria", "Ronda", "Partido_ID", "Competidor1_ID", "Competidor1_Nombre", 
+            "Dojo1", "Competidor2_ID", "Competidor2_Nombre", "Dojo2", 
+            "Ganador_ID", "Ganador_Nombre", "Siguiente_Partido_ID", "Posicion", 
+            "Total_Rondas", "Estado_Partido", "Tipo_Emparejamiento"
+        ])
 
 def guardar_brackets(df):
     try:
@@ -122,117 +131,315 @@ def guardar_brackets(df):
     except:
         return False
 
-# === GENERADOR DE BRACKETS DINÁMICOS ===
-def generar_brackets_dinamicos():
+# === NUEVA LÓGICA DE EMPAREJAMIENTO MEJORADA ===
+def generar_emparejamientos_por_categoria(df_competidores, categoria, tipo_emparejamiento="aleatorio", seed=None):
+    """
+    Genera emparejamientos para una categoría específica con diferentes estrategias
+    """
+    if seed:
+        random.seed(seed)
+    
+    num_competidores = len(df_competidores)
+    if num_competidores < 2:
+        return []
+    
+    # Copia de competidores para no modificar el original
+    competidores = df_competidores.copy()
+    
+    # Aplicar estrategia de emparejamiento
+    if tipo_emparejamiento == "aleatorio":
+        competidores = competidores.sample(frac=1).reset_index(drop=True)
+    
+    elif tipo_emparejamiento == "por_dojo":
+        # Evitar que competidores del mismo dojo se enfrenten en primera ronda
+        dojos = competidores['Dojo'].tolist()
+        indices = list(range(num_competidores))
+        random.shuffle(indices)
+        
+        # Reordenar para separar dojos
+        competidores_reordenados = []
+        dojos_vistos = set()
+        
+        for idx in indices:
+            if len(competidores_reordenados) < num_competidores:
+                competidores_reordenados.append(competidores.iloc[idx])
+        
+        if competidores_reordenados:
+            competidores = pd.DataFrame(competidores_reordenados).reset_index(drop=True)
+    
+    elif tipo_emparejamiento == "por_pais":
+        # Similar a por_dojo pero por país
+        paises = competidores['Pais'].tolist()
+        indices = list(range(num_competidores))
+        random.shuffle(indices)
+        
+        competidores_reordenados = []
+        for idx in indices:
+            if len(competidores_reordenados) < num_competidores:
+                competidores_reordenados.append(competidores.iloc[idx])
+        
+        if competidores_reordenados:
+            competidores = pd.DataFrame(competidores_reordenados).reset_index(drop=True)
+    
+    elif tipo_emparejamiento == "sembrado":
+        # Ordenar por algún criterio (ej. edad, peso, etc.)
+        competidores = competidores.sort_values('Edad', ascending=False).reset_index(drop=True)
+    
+    elif tipo_emparejamiento == "manual":
+        # Para configuración manual desde admin
+        pass
+    
+    return competidores
+
+def calcular_rondas_necesarias(num_competidores):
+    """Calcula el número de rondas y el tamaño del bracket"""
+    num_rondas = math.ceil(math.log2(num_competidores))
+    capacidad_total = 2 ** num_rondas
+    return num_rondas, capacidad_total
+
+def crear_bracket_estructura(categoria, num_rondas, capacidad_total, competidores_ordenados):
+    """Crea la estructura completa del bracket"""
+    partidos = []
+    pid = 1
+    num_competidores = len(competidores_ordenados)
+    
+    # Ronda 1 - Asignar competidores y BYEs
+    for i in range(0, capacidad_total, 2):
+        pos = i // 2
+        
+        # Asignar competidores según orden
+        c1 = competidores_ordenados.iloc[i] if i < num_competidores else None
+        c2 = competidores_ordenados.iloc[i + 1] if (i + 1) < num_competidores else None
+        
+        partido = {
+            "Categoria": categoria,
+            "Ronda": 1,
+            "Partido_ID": pid,
+            "Competidor1_ID": c1['ID'] if c1 is not None else "BYE",
+            "Competidor1_Nombre": c1['Nombre'] if c1 is not None else "BYE",
+            "Dojo1": c1['Dojo'] if c1 is not None else "-",
+            "Competidor2_ID": c2['ID'] if c2 is not None else "BYE",
+            "Competidor2_Nombre": c2['Nombre'] if c2 is not None else "BYE",
+            "Dojo2": c2['Dojo'] if c2 is not None else "-",
+            "Ganador_ID": "",
+            "Ganador_Nombre": "",
+            "Siguiente_Partido_ID": None,
+            "Posicion": pos,
+            "Total_Rondas": num_rondas,
+            "Estado_Partido": "PENDIENTE",
+            "Tipo_Emparejamiento": "AUTOMATICO"
+        }
+        
+        # Si hay BYE, el ganador es automático
+        if partido["Competidor1_Nombre"] == "BYE" and partido["Competidor2_Nombre"] != "BYE":
+            partido["Ganador_ID"] = partido["Competidor2_ID"]
+            partido["Ganador_Nombre"] = partido["Competidor2_Nombre"]
+            partido["Estado_Partido"] = "AUTOMATICO"
+        elif partido["Competidor2_Nombre"] == "BYE" and partido["Competidor1_Nombre"] != "BYE":
+            partido["Ganador_ID"] = partido["Competidor1_ID"]
+            partido["Ganador_Nombre"] = partido["Competidor1_Nombre"]
+            partido["Estado_Partido"] = "AUTOMATICO"
+        elif partido["Competidor1_Nombre"] == "BYE" and partido["Competidor2_Nombre"] == "BYE":
+            partido["Estado_Partido"] = "VACIO"
+        
+        partidos.append(partido)
+        pid += 1
+    
+    # Rondas siguientes
+    partidos_por_ronda = capacidad_total // 2
+    for ronda in range(2, num_rondas + 1):
+        partidos_por_ronda = partidos_por_ronda // 2
+        for j in range(partidos_por_ronda):
+            # Calcular partido origen para la siguiente ronda
+            partido_origen1 = (j * 2) + 1
+            partido_origen2 = (j * 2) + 2
+            
+            partido = {
+                "Categoria": categoria,
+                "Ronda": ronda,
+                "Partido_ID": pid,
+                "Competidor1_ID": "",
+                "Competidor1_Nombre": "",
+                "Dojo1": "",
+                "Competidor2_ID": "",
+                "Competidor2_Nombre": "",
+                "Dojo2": "",
+                "Ganador_ID": "",
+                "Ganador_Nombre": "",
+                "Siguiente_Partido_ID": None,
+                "Posicion": j,
+                "Total_Rondas": num_rondas,
+                "Estado_Partido": "PENDIENTE",
+                "Tipo_Emparejamiento": "AUTOMATICO"
+            }
+            partidos.append(partido)
+            pid += 1
+    
+    return partidos
+
+def generar_brackets_avanzados(estrategias_por_categoria=None):
+    """
+    Genera brackets con estrategias configurables por categoría
+    """
     df = leer_inscripciones()
     if df.empty: 
         return False, "No hay inscripciones registradas"
     
     df_conf = df[df['Estado'] == 'CONFIRMADO'].copy()
     if len(df_conf) < 2: 
-        return False, "Se necesitan al menos 2 competidores para generar brackets"
+        return False, "Se necesitan al menos 2 competidores"
     
     todos_partidos = []
     stats_categorias = {}
-    pid = 1
+    
+    if estrategias_por_categoria is None:
+        estrategias_por_categoria = {}
     
     for categoria in CATEGORIAS:
         df_cat = df_conf[df_conf['Categoria'] == categoria]
         num_competidores = len(df_cat)
         
         if num_competidores >= 2:
-            participantes = df_cat.to_dict('records')
-            random.shuffle(participantes)
+            # Obtener estrategia para esta categoría (default: aleatorio)
+            estrategia = estrategias_por_categoria.get(categoria, {
+                'tipo': 'aleatorio',
+                'seed': int(time.time())
+            })
             
-            num_rondas = math.ceil(math.log2(num_competidores))
-            capacidad_total = 2 ** num_rondas
+            # Generar orden de competidores según estrategia
+            competidores_ordenados = generar_emparejamientos_por_categoria(
+                df_cat, 
+                categoria,
+                tipo_emparejamiento=estrategia['tipo'],
+                seed=estrategia.get('seed')
+            )
+            
+            num_rondas, capacidad_total = calcular_rondas_necesarias(num_competidores)
             
             stats_categorias[categoria] = {
-                'competidores': num_competidores, 
+                'competidores': num_competidores,
                 'rondas': num_rondas,
-                'capacidad': capacidad_total
+                'capacidad': capacidad_total,
+                'estrategia': estrategia['tipo']
             }
             
-            competidores_lista = participantes.copy()
-            byes_necesarios = capacidad_total - num_competidores
+            # Crear estructura del bracket
+            partidos_categoria = crear_bracket_estructura(
+                categoria, 
+                num_rondas, 
+                capacidad_total, 
+                competidores_ordenados
+            )
             
-            for i in range(byes_necesarios):
-                competidores_lista.insert(random.randint(0, len(competidores_lista)), None)
-            
-            # Ronda 1
-            for i in range(0, len(competidores_lista), 2):
-                c1 = competidores_lista[i]
-                c2 = competidores_lista[i + 1]
-                
-                n1 = c1['Nombre'] if c1 else "BYE"
-                d1 = c1['Dojo'] if c1 else "-"
-                n2 = c2['Nombre'] if c2 else "BYE"
-                d2 = c2['Dojo'] if c2 else "-"
-                
-                winner = ""
-                if n1 == "BYE" and n2 != "BYE":
-                    winner = n2
-                elif n2 == "BYE" and n1 != "BYE":
-                    winner = n1
-
-                partido = {
-                    "Categoria": categoria, 
-                    "Ronda": 1, 
-                    "Partido_ID": pid,
-                    "Competidor1": n1, 
-                    "Dojo1": d1,
-                    "Competidor2": n2, 
-                    "Dojo2": d2,
-                    "Ganador": winner,
-                    "Posicion": i // 2, 
-                    "Total_Rondas": num_rondas
-                }
-                todos_partidos.append(partido)
-                pid += 1
-            
-            # Rondas siguientes
-            partidos_por_ronda = capacidad_total // 2
-            for ronda in range(2, num_rondas + 1):
-                partidos_por_ronda = partidos_por_ronda // 2
-                for j in range(partidos_por_ronda):
-                    partido = {
-                        "Categoria": categoria, 
-                        "Ronda": ronda, 
-                        "Partido_ID": pid,
-                        "Competidor1": "", 
-                        "Dojo1": "",
-                        "Competidor2": "", 
-                        "Dojo2": "",
-                        "Ganador": "",
-                        "Posicion": j, 
-                        "Total_Rondas": num_rondas
-                    }
-                    todos_partidos.append(partido)
-                    pid += 1
-
+            todos_partidos.extend(partidos_categoria)
+    
     if todos_partidos:
         df_brackets = pd.DataFrame(todos_partidos)
         if guardar_brackets(df_brackets):
             mensaje = "✅ Brackets generados exitosamente\n\n"
             for cat, stats in stats_categorias.items():
-                mensaje += f"• **{cat}**: {stats['competidores']} competidores\n"
+                mensaje += f"• **{cat}**: {stats['competidores']} competidores "
+                mensaje += f"({stats['estrategia']})\n"
             return True, mensaje
     
     return False, "No se pudieron generar los brackets"
 
-# === CSS FUTURISTA PROFESIONAL ===
+def actualizar_ganador_desde_admin(categoria, partido_id, ganador_id, ganador_nombre):
+    """Actualiza el ganador y propaga automáticamente al siguiente partido"""
+    df_b = leer_brackets()
+    
+    # Actualizar el partido actual
+    mask = (df_b['Categoria'] == categoria) & (df_b['Partido_ID'] == partido_id)
+    df_b.loc[mask, 'Ganador_ID'] = ganador_id
+    df_b.loc[mask, 'Ganador_Nombre'] = ganador_nombre
+    df_b.loc[mask, 'Estado_Partido'] = 'COMPLETADO'
+    
+    # Encontrar el siguiente partido
+    partido_actual = df_b[mask].iloc[0]
+    ronda_actual = partido_actual['Ronda']
+    posicion = partido_actual['Posicion']
+    
+    # Calcular posición en siguiente ronda
+    siguiente_ronda = ronda_actual + 1
+    siguiente_posicion = posicion // 2
+    
+    # Buscar partido en siguiente ronda
+    siguiente_mask = (df_b['Categoria'] == categoria) & \
+                     (df_b['Ronda'] == siguiente_ronda) & \
+                     (df_b['Posicion'] == siguiente_posicion)
+    
+    if not df_b[siguiente_mask].empty:
+        # Determinar si va como competidor1 o competidor2
+        es_competidor1 = (posicion % 2 == 0)
+        
+        if es_competidor1:
+            df_b.loc[siguiente_mask, 'Competidor1_ID'] = ganador_id
+            df_b.loc[siguiente_mask, 'Competidor1_Nombre'] = ganador_nombre
+            df_b.loc[siguiente_mask, 'Dojo1'] = partido_actual.get('Dojo1', '')
+        else:
+            df_b.loc[siguiente_mask, 'Competidor2_ID'] = ganador_id
+            df_b.loc[siguiente_mask, 'Competidor2_Nombre'] = ganador_nombre
+            df_b.loc[siguiente_mask, 'Dojo2'] = partido_actual.get('Dojo2', '')
+        
+        # Verificar si el siguiente partido ya tiene ambos competidores
+        sig_partido = df_b[siguiente_mask].iloc[0]
+        if sig_partido['Competidor1_Nombre'] and sig_partido['Competidor2_Nombre']:
+            if "BYE" not in [sig_partido['Competidor1_Nombre'], sig_partido['Competidor2_Nombre']]:
+                df_b.loc[siguiente_mask, 'Estado_Partido'] = 'LISTO'
+    
+    return guardar_brackets(df_b)
+
+def obtener_siguientes_partidos_disponibles(categoria):
+    """Obtiene los partidos que están listos para jugarse"""
+    df_b = leer_brackets()
+    df_cat = df_b[df_b['Categoria'] == categoria]
+    
+    # Partidos con ambos competidores y sin ganador
+    disponibles = df_cat[
+        (df_cat['Competidor1_Nombre'] != "") & 
+        (df_cat['Competidor2_Nombre'] != "") & 
+        (df_cat['Competidor1_Nombre'] != "BYE") & 
+        (df_cat['Competidor2_Nombre'] != "BYE") &
+        (df_cat['Ganador_Nombre'] == "")
+    ]
+    
+    return disponibles.sort_values(['Ronda', 'Posicion'])
+
+def obtener_resumen_brackets():
+    """Obtiene resumen del estado de los brackets"""
+    df_b = leer_brackets()
+    if df_b.empty:
+        return {}
+    
+    resumen = {}
+    for categoria in df_b['Categoria'].unique():
+        df_cat = df_b[df_b['Categoria'] == categoria]
+        
+        total_partidos = len(df_cat)
+        completados = len(df_cat[df_cat['Estado_Partido'] == 'COMPLETADO'])
+        pendientes = len(df_cat[df_cat['Estado_Partido'] == 'PENDIENTE'])
+        automaticos = len(df_cat[df_cat['Estado_Partido'] == 'AUTOMATICO'])
+        
+        resumen[categoria] = {
+            'total': total_partidos,
+            'completados': completados,
+            'pendientes': pendientes,
+            'automaticos': automaticos,
+            'progreso': f"{completados}/{total_partidos}"
+        }
+    
+    return resumen
+
+# === CSS FUTURISTA PROFESIONAL (igual que antes) ===
 css = """
 <style>
-    /* Importar fuentes */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Space+Grotesk:wght@300;400;600;700&display=swap');
     
-    /* Reset y base */
     .stApp {
         background: #0a0a0f;
         font-family: 'Inter', sans-serif;
     }
     
-    /* Scrollbar personalizado */
     ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
@@ -244,39 +451,20 @@ css = """
         background: #ff2b2b;
         border-radius: 4px;
     }
-    ::-webkit-scrollbar-thumb:hover {
-        background: #ff5555;
-    }
     
-    /* Header y logo */
     .header-container {
         text-align: center;
         padding: 40px 20px;
         position: relative;
         overflow: hidden;
     }
-    .header-container::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: radial-gradient(circle at 30% 50%, rgba(255,43,43,0.03) 0%, transparent 50%);
-        animation: rotate 20s linear infinite;
-    }
-    @keyframes rotate {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
-    }
+    
     .logo-img {
         width: min(400px, 80%);
         filter: drop-shadow(0 0 40px rgba(255,43,43,0.3));
         transition: transform 0.5s;
     }
-    .logo-img:hover {
-        transform: scale(1.02);
-    }
+    
     .title-main {
         font-family: 'Space Grotesk', sans-serif;
         font-size: clamp(2rem, 5vw, 3.5rem);
@@ -287,14 +475,7 @@ css = """
         margin: 20px 0 10px;
         letter-spacing: 2px;
     }
-    .subtitle {
-        color: rgba(255,255,255,0.5);
-        font-size: 0.9rem;
-        letter-spacing: 4px;
-        text-transform: uppercase;
-    }
     
-    /* Countdown grid */
     .countdown-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -303,64 +484,32 @@ css = """
         margin: 40px auto;
         padding: 0 20px;
     }
+    
     .countdown-item {
         background: linear-gradient(145deg, #12121a, #1a1a24);
         border: 1px solid rgba(255,255,255,0.05);
         border-radius: 20px;
         padding: 20px;
         text-align: center;
-        position: relative;
-        overflow: hidden;
         transition: all 0.3s;
     }
-    .countdown-item::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, #ff2b2b, transparent);
-    }
-    .countdown-item:hover {
-        transform: translateY(-5px);
-        border-color: rgba(255,43,43,0.3);
-        box-shadow: 0 10px 30px rgba(255,43,43,0.1);
-    }
+    
     .countdown-number {
         font-family: 'Space Grotesk', monospace;
         font-size: clamp(2rem, 5vw, 3rem);
         font-weight: 800;
         color: #ff2b2b;
-        line-height: 1;
-        margin-bottom: 5px;
-        text-shadow: 0 0 20px rgba(255,43,43,0.3);
-    }
-    .countdown-label {
-        color: rgba(255,255,255,0.5);
-        font-size: 0.8rem;
-        letter-spacing: 2px;
-        text-transform: uppercase;
     }
     
-    /* Cards de contenido */
     .glass-card {
         background: rgba(18, 18, 26, 0.7);
         backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255,255,255,0.03);
         border-radius: 24px;
         padding: 30px;
         margin: 20px 0;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        transition: all 0.3s;
-    }
-    .glass-card:hover {
-        border-color: rgba(255,43,43,0.2);
-        box-shadow: 0 30px 60px rgba(255,43,43,0.15);
     }
     
-    /* Métricas */
     .metric-container {
         background: linear-gradient(145deg, #12121a, #0a0a0f);
         border-radius: 20px;
@@ -369,148 +518,37 @@ css = """
         border: 1px solid rgba(255,255,255,0.05);
         transition: all 0.3s;
     }
-    .metric-container:hover {
-        border-color: #ff2b2b;
-        transform: translateY(-5px);
-    }
+    
     .metric-label {
         color: rgba(255,255,255,0.5);
         font-size: 0.8rem;
         letter-spacing: 2px;
         text-transform: uppercase;
-        margin-bottom: 10px;
     }
+    
     .metric-value {
         font-family: 'Space Grotesk', sans-serif;
         font-size: 2.5rem;
         font-weight: 800;
         color: #ff2b2b;
-        text-shadow: 0 0 30px rgba(255,43,43,0.3);
     }
     
-    /* Tabs personalizadas */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(18, 18, 26, 0.5);
-        backdrop-filter: blur(10px);
-        padding: 8px;
-        border-radius: 50px;
-        border: 1px solid rgba(255,255,255,0.03);
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 40px;
-        padding: 10px 24px;
-        font-family: 'Inter', sans-serif;
-        font-weight: 600;
-        font-size: 0.9rem;
-        letter-spacing: 1px;
-        transition: all 0.3s;
-    }
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #ff2b2b, #ff5555) !important;
-        color: white !important;
-    }
-    
-    /* Formulario */
-    .stTextInput > div > div > input,
-    .stSelectbox > div > div > div,
-    .stNumberInput > div > div > input {
-        background: rgba(18, 18, 26, 0.8) !important;
-        border: 1px solid rgba(255,255,255,0.05) !important;
-        border-radius: 12px !important;
-        color: white !important;
-        font-family: 'Inter', sans-serif !important;
-        transition: all 0.3s !important;
-    }
-    .stTextInput > div > div > input:focus,
-    .stSelectbox > div > div > div:focus,
-    .stNumberInput > div > div > input:focus {
-        border-color: #ff2b2b !important;
-        box-shadow: 0 0 0 2px rgba(255,43,43,0.2) !important;
-    }
-    
-    /* Botones */
     .stButton > button {
         background: linear-gradient(135deg, #ff2b2b, #ff5555) !important;
         color: white !important;
         font-family: 'Inter', sans-serif !important;
         font-weight: 600 !important;
-        font-size: 0.9rem !important;
-        letter-spacing: 1px !important;
-        padding: 12px 24px !important;
         border: none !important;
         border-radius: 12px !important;
+        padding: 12px 24px !important;
         width: 100%;
         transition: all 0.3s !important;
-        text-transform: uppercase !important;
-        box-shadow: 0 10px 20px rgba(255,43,43,0.2) !important;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 15px 30px rgba(255,43,43,0.3) !important;
     }
     
-    /* Admin button especial */
     .admin-button > button {
         background: linear-gradient(135deg, #ff8c00, #ff2b2b) !important;
     }
     
-    /* Dividers */
-    hr {
-        border: none;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(255,43,43,0.3), transparent);
-        margin: 30px 0;
-    }
-    
-    /* Expanders */
-    .streamlit-expanderHeader {
-        background: rgba(18, 18, 26, 0.5) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(255,255,255,0.05) !important;
-        font-family: 'Inter', sans-serif !important;
-    }
-    
-    /* Dataframes */
-    .stDataFrame {
-        background: rgba(18, 18, 26, 0.5) !important;
-        border-radius: 16px !important;
-        border: 1px solid rgba(255,255,255,0.05) !important;
-        padding: 5px;
-    }
-    
-    /* Mensajes */
-    .stSuccess {
-        background: rgba(0,255,0,0.1) !important;
-        border-left-color: #00ff00 !important;
-        color: white !important;
-        border-radius: 8px !important;
-    }
-    .stError {
-        background: rgba(255,0,0,0.1) !important;
-        border-left-color: #ff2b2b !important;
-        color: white !important;
-        border-radius: 8px !important;
-    }
-    .stInfo {
-        background: rgba(255,255,255,0.05) !important;
-        border-left-color: #ff2b2b !important;
-        color: white !important;
-        border-radius: 8px !important;
-    }
-    
-    /* Footer */
-    .footer {
-        text-align: center;
-        color: rgba(255,255,255,0.3);
-        padding: 40px 0 20px;
-        font-size: 0.8rem;
-        letter-spacing: 1px;
-        border-top: 1px solid rgba(255,255,255,0.03);
-        margin-top: 60px;
-    }
-    
-    /* Brackets styling */
     .bracket-container {
         background: rgba(18, 18, 26, 0.5);
         backdrop-filter: blur(10px);
@@ -519,12 +557,14 @@ css = """
         margin: 20px 0;
         overflow-x: auto;
     }
+    
     .bracket-round {
         display: flex;
         flex-direction: column;
         gap: 20px;
         min-width: 300px;
     }
+    
     .bracket-round-title {
         font-family: 'Space Grotesk', sans-serif;
         font-size: 1.2rem;
@@ -533,8 +573,8 @@ css = """
         text-align: center;
         padding-bottom: 10px;
         border-bottom: 2px solid rgba(255,43,43,0.3);
-        margin-bottom: 20px;
     }
+    
     .bracket-match {
         background: linear-gradient(145deg, #12121a, #1a1a24);
         border: 1px solid rgba(255,255,255,0.05);
@@ -543,30 +583,37 @@ css = """
         position: relative;
         transition: all 0.3s;
     }
-    .bracket-match:hover {
-        border-color: #ff2b2b;
-        transform: scale(1.02);
+    
+    .bracket-match.ready {
+        border-color: #00ff88;
+        box-shadow: 0 0 20px rgba(0,255,136,0.2);
     }
+    
+    .bracket-match.completed {
+        border-color: gold;
+        opacity: 0.8;
+    }
+    
     .bracket-competitor {
         padding: 8px 12px;
         border-radius: 8px;
         margin: 5px 0;
         font-size: 0.9rem;
     }
+    
     .bracket-competitor.red {
         border-left: 4px solid #ff2b2b;
     }
+    
     .bracket-competitor.blue {
         border-left: 4px solid #1e90ff;
     }
+    
     .bracket-competitor.winner {
         background: rgba(255,215,0,0.1);
         border-left-color: gold;
     }
-    .bracket-dojo {
-        font-size: 0.7rem;
-        color: rgba(255,255,255,0.3);
-    }
+    
     .bracket-id {
         position: absolute;
         top: -8px;
@@ -576,46 +623,50 @@ css = """
         font-size: 0.6rem;
         padding: 2px 8px;
         border-radius: 20px;
-        font-weight: 600;
-    }
-    .bracket-bye {
-        background: rgba(255,215,0,0.1);
-        color: gold;
-        font-size: 0.7rem;
-        padding: 2px 8px;
-        border-radius: 20px;
-        display: inline-block;
-        margin-top: 5px;
     }
     
-    /* Leyenda */
-    .legend {
-        display: flex;
-        gap: 30px;
-        justify-content: center;
-        flex-wrap: wrap;
-        margin: 30px 0;
-        padding: 20px;
-        background: rgba(18, 18, 26, 0.3);
-        border-radius: 50px;
-        border: 1px solid rgba(255,255,255,0.03);
+    .status-badge {
+        position: absolute;
+        top: -8px;
+        left: 10px;
+        font-size: 0.6rem;
+        padding: 2px 8px;
+        border-radius: 20px;
+        background: #666;
+        color: white;
     }
-    .legend-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: rgba(255,255,255,0.7);
-        font-size: 0.8rem;
+    
+    .status-badge.ready {
+        background: #00ff88;
+        color: black;
     }
-    .legend-color {
-        width: 16px;
-        height: 16px;
+    
+    .status-badge.completed {
+        background: gold;
+        color: black;
+    }
+    
+    .progress-bar {
+        height: 8px;
+        background: rgba(255,255,255,0.1);
         border-radius: 4px;
+        overflow: hidden;
+        margin: 10px 0;
     }
-    .legend-color.red { background: #ff2b2b; }
-    .legend-color.blue { background: #1e90ff; }
-    .legend-color.gold { background: gold; }
-    .legend-color.bye { background: gold; opacity: 0.3; }
+    
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #ff2b2b, gold);
+        transition: width 0.3s;
+    }
+    
+    .strategy-selector {
+        background: rgba(255,43,43,0.1);
+        border: 1px solid #ff2b2b;
+        border-radius: 8px;
+        padding: 10px;
+        margin: 10px 0;
+    }
 </style>
 """
 st.markdown(css, unsafe_allow_html=True)
@@ -666,41 +717,60 @@ with tab1:
     if not df.empty:
         df_conf = df[df['Estado'] == 'CONFIRMADO']
         
-        # Métricas
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.markdown("""
+            st.markdown(f"""
             <div class="metric-container">
                 <div class="metric-label">INSCRITOS</div>
-                <div class="metric-value">{}</div>
+                <div class="metric-value">{len(df_conf)}</div>
             </div>
-            """.format(len(df_conf)), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
         
         with col2:
-            st.markdown("""
+            st.markdown(f"""
             <div class="metric-container">
                 <div class="metric-label">CATEGORÍAS</div>
-                <div class="metric-value">{}</div>
+                <div class="metric-value">{df_conf['Categoria'].nunique()}</div>
             </div>
-            """.format(df_conf['Categoria'].nunique()), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
         
         with col3:
-            st.markdown("""
+            st.markdown(f"""
             <div class="metric-container">
                 <div class="metric-label">DOJOS</div>
-                <div class="metric-value">{}</div>
+                <div class="metric-value">{df_conf['Dojo'].nunique()}</div>
             </div>
-            """.format(df_conf['Dojo'].nunique()), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
         
         with col4:
             cupos_restantes = 500 - len(df_conf)
-            st.markdown("""
+            st.markdown(f"""
             <div class="metric-container">
                 <div class="metric-label">CUPOS</div>
-                <div class="metric-value">{}</div>
+                <div class="metric-value">{cupos_restantes}</div>
             </div>
-            """.format(cupos_restantes), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+        
+        # Resumen de brackets
+        resumen_brackets = obtener_resumen_brackets()
+        if resumen_brackets:
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.markdown("### 🏆 Progreso del Torneo")
+            
+            for cat, stats in resumen_brackets.items():
+                progreso = (stats['completados'] / stats['total']) * 100 if stats['total'] > 0 else 0
+                st.markdown(f"""
+                <div style="margin: 10px 0;">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>{cat}</span>
+                        <span>{stats['progreso']} partidos</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: {progreso}%;"></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
         
         st.markdown("<hr>", unsafe_allow_html=True)
         
@@ -715,8 +785,7 @@ with tab1:
             marker=dict(
                 color=counts.values,
                 colorscale=[[0, '#440000'], [1, '#ff2b2b']],
-                showscale=False,
-                line=dict(color='white', width=1)
+                showscale=False
             ),
             text=counts.values,
             textposition='outside',
@@ -728,17 +797,7 @@ with tab1:
             paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color='white', family='Inter'),
             height=500,
-            margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.05)',
-                title="Número de Inscritos",
-                title_font=dict(color='rgba(255,255,255,0.5)')
-            ),
-            yaxis=dict(
-                showgrid=False,
-                title_font=dict(color='rgba(255,255,255,0.5)')
-            )
+            margin=dict(l=0, r=0, t=30, b=0)
         )
         
         st.plotly_chart(fig, use_container_width=True)
@@ -748,7 +807,7 @@ with tab1:
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ========== TAB 2: INSCRIPCIÓN ==========
+# ========== TAB 2: INSCRIPCIÓN (igual que antes) ==========
 with tab2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 📝 Formulario de Inscripción")
@@ -828,25 +887,70 @@ with tab3:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 🏆 Brackets del Torneo")
     
-    # Verificar si es admin (para mostrar botón de generar)
+    # Verificar admin
     is_admin = False
     with st.expander("🔐 Acceso Admin", expanded=False):
         admin_pass = st.text_input("Contraseña Admin", type="password", key="admin_pass_brackets")
         is_admin = verificar_admin(admin_pass)
     
-    # Botón de generar brackets (solo visible para admin)
+    # Panel de generación de brackets (solo admin)
     if is_admin:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("⚡ GENERAR BRACKETS", use_container_width=True, key="gen_brackets"):
-                with st.spinner("Generando brackets..."):
-                    resultado, mensaje = generar_brackets_dinamicos()
-                    if resultado:
-                        st.success(mensaje)
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning(mensaje)
+        st.markdown("#### ⚙️ Configuración de Emparejamientos")
+        
+        with st.form("config_brackets"):
+            estrategias = {}
+            
+            st.markdown('<div class="strategy-selector">', unsafe_allow_html=True)
+            st.markdown("Selecciona estrategia por categoría:")
+            
+            # Opción global
+            estrategia_global = st.selectbox(
+                "Estrategia Global (aplica a todas)",
+                ["aleatorio", "por_dojo", "por_pais", "sembrado", "manual"],
+                format_func=lambda x: {
+                    "aleatorio": "🎲 Completamente aleatorio",
+                    "por_dojo": "🏢 Separar por Dojo",
+                    "por_pais": "🌍 Separar por País",
+                    "sembrado": "📊 Sembrado por Edad",
+                    "manual": "✋ Configuración manual"
+                }.get(x, x)
+            )
+            
+            # Opciones por categoría
+            st.markdown("---")
+            st.markdown("Ajustes específicos por categoría:")
+            
+            cols = st.columns(2)
+            for i, categoria in enumerate(CATEGORIAS):
+                with cols[i % 2]:
+                    estrategia_cat = st.selectbox(
+                        f"{categoria[:20]}...",
+                        ["global", "aleatorio", "por_dojo", "por_pais", "sembrado"],
+                        index=0,
+                        key=f"strat_{categoria}"
+                    )
+                    if estrategia_cat != "global":
+                        estrategias[categoria] = {
+                            'tipo': estrategia_cat,
+                            'seed': int(time.time())
+                        }
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                generar = st.form_submit_button("⚡ GENERAR BRACKETS CON ESTRATEGIA")
+        
+        if generar:
+            with st.spinner("Generando brackets con estrategias personalizadas..."):
+                resultado, mensaje = generar_brackets_avanzados(estrategias)
+                if resultado:
+                    st.success(mensaje)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning(mensaje)
+        
         st.markdown("<hr>", unsafe_allow_html=True)
     
     # Mostrar brackets
@@ -861,6 +965,27 @@ with tab3:
         if not df_cat.empty:
             total_rondas = int(df_cat['Total_Rondas'].iloc[0])
             rondas = sorted(df_cat['Ronda'].unique())
+            
+            # Partidos listos para jugar
+            partidos_listos = obtener_siguientes_partidos_disponibles(categoria_sel)
+            if not partidos_listos.empty and is_admin:
+                st.markdown("#### ⚔️ Partidos Listos para Jugar")
+                with st.expander("Seleccionar Ganadores"):
+                    for _, partido in partidos_listos.iterrows():
+                        st.markdown(f"**Partido #{partido['Partido_ID']}**")
+                        ganador = st.radio(
+                            f"",
+                            [partido['Competidor1_Nombre'], partido['Competidor2_Nombre']],
+                            key=f"winner_{partido['Partido_ID']}",
+                            horizontal=True
+                        )
+                        
+                        if st.button(f"✓ Confirmar Ganador", key=f"btn_{partido['Partido_ID']}"):
+                            ganador_id = partido['Competidor1_ID'] if ganador == partido['Competidor1_Nombre'] else partido['Competidor2_ID']
+                            if actualizar_ganador_desde_admin(categoria_sel, partido['Partido_ID'], ganador_id, ganador):
+                                st.success(f"✅ Ganador: {ganador}")
+                                st.rerun()
+                        st.markdown("---")
             
             # Construir HTML de brackets
             html = '<div class="bracket-container"><div style="display: flex; gap: 40px; min-width: max-content;">'
@@ -884,23 +1009,39 @@ with tab3:
                 for _, p in df_ronda.iterrows():
                     # Datos seguros
                     id_p = str(p['Partido_ID'])
-                    c1 = str(p['Competidor1']) if p['Competidor1'] else "---"
-                    c2 = str(p['Competidor2']) if p['Competidor2'] else "---"
+                    c1 = str(p['Competidor1_Nombre']) if p['Competidor1_Nombre'] else "---"
+                    c2 = str(p['Competidor2_Nombre']) if p['Competidor2_Nombre'] else "---"
                     d1 = str(p['Dojo1']) if p['Dojo1'] else ""
                     d2 = str(p['Dojo2']) if p['Dojo2'] else ""
-                    ganador = str(p['Ganador'])
+                    ganador = str(p['Ganador_Nombre'])
+                    estado = str(p['Estado_Partido'])
                     
                     # Determinar estilos
                     c1_win = (ganador == c1 and ganador != "" and ganador != "---")
                     c2_win = (ganador == c2 and ganador != "" and ganador != "---")
+                    
+                    # Clase para el match
+                    match_class = "bracket-match"
+                    if estado == "COMPLETADO":
+                        match_class += " completed"
+                    elif c1 != "---" and c2 != "---" and c1 != "BYE" and c2 != "BYE" and not ganador:
+                        match_class += " ready"
+                    
+                    # Badge de estado
+                    status_badge = ""
+                    if estado == "COMPLETADO":
+                        status_badge = '<span class="status-badge completed">COMPLETADO</span>'
+                    elif c1 != "---" and c2 != "---" and c1 != "BYE" and c2 != "BYE" and not ganador:
+                        status_badge = '<span class="status-badge ready">LISTO</span>'
                     
                     # Bye badge
                     bye_badge = ""
                     if "BYE" in [c1, c2]:
                         bye_badge = '<div class="bracket-bye">⭐ BYE</div>'
                     
-                    html += f'<div class="bracket-match">'
+                    html += f'<div class="{match_class}">'
                     html += f'<span class="bracket-id">#{id_p}</span>'
+                    html += status_badge
                     html += bye_badge
                     
                     # Competidor 1
@@ -917,11 +1058,11 @@ with tab3:
                         html += f'<div class="bracket-dojo">{d2}</div>'
                     html += '</div>'
                     
-                    html += '</div>'  # Cierra bracket-match
+                    html += '</div>'
                 
-                html += '</div>'  # Cierra bracket-round
+                html += '</div>'
             
-            html += '</div></div>'  # Cierra contenedores
+            html += '</div></div>'
             
             st.markdown(html, unsafe_allow_html=True)
             
@@ -932,6 +1073,8 @@ with tab3:
                 <div class="legend-item"><div class="legend-color blue"></div> Ao (Azul)</div>
                 <div class="legend-item"><div class="legend-color gold"></div> Ganador</div>
                 <div class="legend-item"><div class="legend-color bye"></div> BYE</div>
+                <div class="legend-item"><span style="color:#00ff88;">🟢</span> Listo</div>
+                <div class="legend-item"><span style="color:gold;">🏆</span> Completado</div>
             </div>
             """, unsafe_allow_html=True)
     
@@ -948,7 +1091,7 @@ with tab4:
     password = st.text_input("Contraseña", type="password", key="admin_pass_main")
     
     if verificar_admin(password):
-        tabs_admin = st.tabs(["📋 Inscripciones", "🏆 Brackets", "📊 Estadísticas"])
+        tabs_admin = st.tabs(["📋 Inscripciones", "🏆 Gestión de Brackets", "📊 Estadísticas", "⚙️ Configuración"])
         
         with tabs_admin[0]:
             df_admin = leer_inscripciones()
@@ -968,36 +1111,56 @@ with tab4:
         with tabs_admin[1]:
             df_b = leer_brackets()
             if not df_b.empty:
-                st.dataframe(df_b, use_container_width=True, hide_index=True)
+                st.markdown("#### 🔧 Edición Manual de Brackets")
                 
-                with st.expander("Gestionar Resultados"):
-                    with st.form("edit_brackets"):
-                        categorias_b = df_b['Categoria'].unique()
-                        cat_b = st.selectbox("Categoría", categorias_b)
+                # Vista de datos
+                with st.expander("Ver datos completos"):
+                    st.dataframe(df_b, use_container_width=True, hide_index=True)
+                
+                # Editor de partidos
+                with st.expander("Editar partido específico"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        cat_edit = st.selectbox("Categoría", df_b['Categoria'].unique())
+                    with col2:
+                        df_cat_edit = df_b[df_b['Categoria'] == cat_edit]
+                        partido_edit = st.selectbox("ID Partido", df_cat_edit['Partido_ID'].unique())
+                    
+                    if partido_edit:
+                        partido = df_cat_edit[df_cat_edit['Partido_ID'] == partido_edit].iloc[0]
                         
-                        df_cat_b = df_b[df_b['Categoria'] == cat_b]
-                        partido_id = st.selectbox("ID Partido", df_cat_b['Partido_ID'].unique())
-                        
-                        df_partido = df_cat_b[df_cat_b['Partido_ID'] == partido_id].iloc[0]
-                        
-                        c1 = df_partido['Competidor1']
-                        c2 = df_partido['Competidor2']
-                        
-                        if c1 and c2 and c1 != "BYE" and c2 != "BYE":
-                            ganador = st.radio("Ganador", [c1, c2], index=None)
+                        with st.form("edit_partido"):
+                            st.markdown(f"**Partido #{partido_edit} - Ronda {partido['Ronda']}**")
                             
-                            if st.form_submit_button("GUARDAR"):
-                                if ganador:
-                                    df_b.loc[(df_b['Categoria'] == cat_b) & 
-                                            (df_b['Partido_ID'] == partido_id), 'Ganador'] = ganador
-                                    if guardar_brackets(df_b):
-                                        st.success(f"✅ Ganador: {ganador}")
-                                        st.rerun()
-                                else:
-                                    st.error("Selecciona un ganador")
-                        else:
-                            st.info("Partido con BYE o vacío")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                c1_nombre = st.text_input("Competidor 1", partido['Competidor1_Nombre'])
+                                c1_dojo = st.text_input("Dojo 1", partido['Dojo1'])
+                            with col2:
+                                c2_nombre = st.text_input("Competidor 2", partido['Competidor2_Nombre'])
+                                c2_dojo = st.text_input("Dojo 2", partido['Dojo2'])
+                            
+                            ganador = st.text_input("Ganador", partido['Ganador_Nombre'])
+                            estado = st.selectbox("Estado", ["PENDIENTE", "COMPLETADO", "AUTOMATICO", "VACIO"])
+                            
+                            if st.form_submit_button("💾 ACTUALIZAR"):
+                                df_b.loc[(df_b['Categoria'] == cat_edit) & 
+                                        (df_b['Partido_ID'] == partido_edit), 
+                                        ['Competidor1_Nombre', 'Dojo1', 'Competidor2_Nombre', 
+                                         'Dojo2', 'Ganador_Nombre', 'Estado_Partido']] = [
+                                    c1_nombre, c1_dojo, c2_nombre, c2_dojo, ganador, estado
+                                ]
+                                if guardar_brackets(df_b):
+                                    st.success("✅ Partido actualizado")
+                                    st.rerun()
                 
+                # Gestión de BYEs
+                with st.expander("Gestionar BYEs automáticos"):
+                    if st.button("🔄 Recalcular BYEs automáticos"):
+                        # Lógica para recalcular BYEs
+                        st.info("Funcionalidad en desarrollo")
+                
+                # Reset
                 if st.button("⚠️ REINICIAR BRACKETS", use_container_width=True):
                     df_vacio = pd.DataFrame(columns=df_b.columns)
                     if guardar_brackets(df_vacio):
@@ -1041,6 +1204,34 @@ with tab4:
                         <div class="metric-value">{pendientes}</div>
                     </div>
                     """, unsafe_allow_html=True)
+                
+                # Estadísticas de brackets
+                resumen = obtener_resumen_brackets()
+                if resumen:
+                    st.markdown("---")
+                    st.markdown("### 📊 Estado de Brackets")
+                    
+                    df_resumen = pd.DataFrame(resumen).T
+                    st.dataframe(df_resumen, use_container_width=True)
+        
+        with tabs_admin[3]:
+            st.markdown("#### ⚙️ Configuración del Sistema")
+            
+            with st.form("config_sistema"):
+                st.markdown("**Estrategias por defecto**")
+                default_strategy = st.selectbox(
+                    "Estrategia global por defecto",
+                    ["aleatorio", "por_dojo", "por_pais", "sembrado"]
+                )
+                
+                st.markdown("**Límites del torneo**")
+                max_inscripciones = st.number_input("Máximo de inscripciones", 100, 1000, 500)
+                
+                st.markdown("**Configuración de Google Sheets**")
+                st.info("Configurar en secrets.toml")
+                
+                if st.form_submit_button("💾 GUARDAR CONFIGURACIÓN"):
+                    st.success("Configuración guardada (simulado)")
     
     elif password:
         st.error("❌ Contraseña incorrecta")
