@@ -284,7 +284,7 @@ class UIComponents:
         }
         
         .logo-container img {
-            width: min(300px, 80%);
+            width: min(550px, 89%);
             filter: drop-shadow(0 0 20px rgba(255, 43, 43, 0.2));
             transition: filter 0.3s;
         }
@@ -996,3 +996,4 @@ class WKBApp:
 if __name__ == "__main__":
     app = WKBApp()
     app.run()
+
