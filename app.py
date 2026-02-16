@@ -1,461 +1,671 @@
 import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
-import time
-import hashlib
-import datetime
-from datetime import timedelta
-import base64
-from PIL import Image
-import io
-import numpy as np
-import random
-import string
-import uuid
 import mercadopago
+import uuid
+import datetime
+import hashlib
+import time
 import logging
 import re
-import json
-import math
 
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
+# --- 1. CONFIGURACIÓN INICIAL ---
 st.set_page_config(
-    page_title="WKB Official Hub", 
-    layout="wide", 
+    page_title="WKB Inscripciones",
     page_icon="🥋",
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
 # Meta tags para móvil
 st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-    /* Ocultar elementos nativos intrusivos */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
+    .stApp {
+        background: linear-gradient(135deg, #0e1117 0%, #1a1f2e 100%);
+    }
+    /* Tarjeta de inscripción */
+    .card {
+        background: #1f2937;
+        border-radius: 15px;
+        padding: 25px;
+        border: 1px solid #374151;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        margin-bottom: 20px;
+    }
+    /* Títulos */
+    .title {
+        color: #FDB931;
+        font-size: 28px;
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 30px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    /* Precio */
+    .price-tag {
+        background: linear-gradient(135deg, #FDB931 0%, #ffaa00 100%);
+        color: #0e1117;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+        font-size: 24px;
+        font-weight: bold;
+        margin: 20px 0;
+    }
+    /* Estados de pago */
+    .success-message {
+        background: rgba(16, 185, 129, 0.2);
+        border: 1px solid #10b981;
+        color: #10b981;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+    }
+    .error-message {
+        background: rgba(239, 68, 68, 0.2);
+        border: 1px solid #ef4444;
+        color: #ef4444;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. LOGGING Y SISTEMA ---
+# --- 2. LOGGING ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def log_event(event_type, details):
-    logger.info(f"{event_type}: {details}")
-
-# --- 3. CONEXIÓN A GOOGLE SHEETS ---
+# --- 3. CONSTANTES ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1hFlkSSPWqoQDSjkiPV5uaIIx-iHjoihLg2yokDJm-4E/edit?gid=0#gid=0"
-SHEET_NAMES = {
-    "brackets": "Brackets",
-    "inscriptions": "Inscripciones",
-    "config": "Configuracion",
-    "payments": "Pagos",
-    "backup": "Backup"
-}
+PRECIO_INSCRIPCION = 15000  # $15,000 CLP
 
+CATEGORIAS = [
+    "KUMITE -65kg (18+)",
+    "KUMITE -70kg (18+)",
+    "KUMITE -75kg (18+)",
+    "KUMITE -80kg (18+)",
+    "KUMITE -90kg (18+)",
+    "KUMITE +90kg (18+)",
+    "KUMITE -55kg (18+) - Femenino",
+    "KUMITE -60kg (18+) - Femenino",
+    "KUMITE +65kg (18+) - Femenino",
+    "KATA (18+) - Mixto"
+]
+
+# --- 4. CONEXIÓN GOOGLE SHEETS ---
 @st.cache_resource
 def get_connection():
     return st.connection("gsheets", type=GSheetsConnection)
 
-# --- 4. FUNCIONES DE CARGA Y GUARDADO ---
-@st.cache_data(ttl=10)
-def load_data(worksheet):
+def cargar_inscripciones():
+    """Carga las inscripciones existentes"""
     try:
         conn = get_connection()
-        return conn.read(spreadsheet=SHEET_URL, worksheet=SHEET_NAMES[worksheet])
+        return conn.read(spreadsheet=SHEET_URL, worksheet="Inscripciones")
     except Exception as e:
-        log_event(f"ERROR_LOAD_{worksheet.upper()}", str(e))
+        logger.error(f"Error cargando inscripciones: {e}")
         return pd.DataFrame()
 
-def save_data(df, worksheet):
+def guardar_inscripcion(datos):
+    """Guarda una nueva inscripción en sheets"""
     try:
         conn = get_connection()
-        conn.update(spreadsheet=SHEET_URL, worksheet=SHEET_NAMES[worksheet], data=df)
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        log_event(f"ERROR_SAVE_{worksheet.upper()}", str(e))
-        st.error(f"Error guardando datos: {e}")
-        return False
-
-# --- 5. LÓGICA DE NEGOCIO Y MODELOS ---
-ALL_CATEGORIES = [
-    f"{g} | {s}" for g, s in {
-        "KUMITE - MEN (18+)": ["-65kg", "-70kg", "-75kg", "-80kg", "-90kg", "+90kg"],
-        "KUMITE - WOMEN (18+)": ["-55kg", "-60kg", "+65kg"],
-        "KATA": ["All Categories"]
-    }.items() for s in s
-]
-
-def init_mercadopago():
-    try:
-        return mercadopago.SDK(st.secrets["mercadopago"]["access_token"])
-    except: return None
-
-# --- 6. ESTILOS CSS PROFESIONALES ---
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700&family=Inter:wght@300;400;600;700&display=swap');
-    
-    .stApp { background-color: #0e1117; font-family: 'Inter', sans-serif; }
-    
-    /* Header */
-    .header-container {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 20px; background: linear-gradient(180deg, #1f2937 0%, #0e1117 100%);
-        border-bottom: 1px solid #374151; margin-bottom: 25px; flex-wrap: wrap; gap: 15px;
-    }
-    
-    /* Brackets Profesionales */
-    .bracket-wrapper {
-        display: flex; flex-direction: row; padding: 40px 20px;
-        overflow-x: auto; gap: 0; min-height: 600px;
-        align-items: flex-start; /* Alineación superior clave */
-    }
-    
-    .bracket-round {
-        display: flex; flex-direction: column; justify-content: space-around;
-        width: 280px; flex-shrink: 0; padding: 0 20px; min-height: 600px;
-    }
-    
-    .bracket-match {
-        display: flex; flex-direction: column; position: relative;
-        margin: 15px 0; padding: 10px 0;
-    }
-    
-    /* Conectores */
-    .bracket-match::before {
-        content: ""; position: absolute; right: -25px; top: 50%;
-        width: 25px; height: 2px; background: #4B5563; z-index: 1;
-    }
-    
-    .bracket-match:nth-child(odd)::after {
-        content: ""; position: absolute; right: -25px; top: 50%;
-        width: 2px; height: 100%; background: #4B5563; z-index: 1;
-        transform: translateY(50%); /* Conecta hacia abajo */
-    }
-    
-    .bracket-match:nth-child(even)::after {
-        content: ""; position: absolute; right: -25px; bottom: 50%;
-        width: 2px; height: 100%; background: #4B5563; z-index: 1;
-        transform: translateY(50%); /* Conecta hacia arriba */
-    }
-    
-    .bracket-round:last-child .bracket-match::before,
-    .bracket-round:last-child .bracket-match::after { display: none; }
-    
-    /* Tarjeta de Jugador */
-    .bracket-player {
-        background: #1f2937; border: 1px solid #374151;
-        padding: 10px 15px; width: 240px; position: relative; z-index: 2;
-        display: flex; justify-content: space-between; align-items: center;
-    }
-    
-    .bracket-player.top { border-radius: 8px 8px 0 0; border-bottom: none; }
-    .bracket-player.bottom { border-radius: 0 0 8px 8px; margin-top: -1px; }
-    
-    .bracket-player.winner {
-        border-color: #FDB931; background: rgba(253, 185, 49, 0.1);
-        color: #FDB931; font-weight: bold;
-    }
-    
-    .player-info { display: flex; flex-direction: column; }
-    .player-name { font-weight: bold; font-size: 14px; }
-    .player-dojo { font-size: 11px; color: #9ca3af; }
-    .vote-count { font-size: 12px; font-weight: bold; color: #FDB931; }
-    
-    /* Botones y UI */
-    .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; }
-    .round-header {
-        text-align: center; color: #FDB931; font-weight: bold;
-        text-transform: uppercase; margin-bottom: 20px; letter-spacing: 1px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# --- 7. FUNCIONES DE BRACKETS Y TORNEO ---
-def generate_dynamic_brackets(category):
-    """Genera brackets dinámicos basados en inscritos"""
-    try:
-        inscriptions = load_data("inscriptions")
-        brackets = load_data("brackets")
+        df_existente = cargar_inscripciones()
         
-        # Filtrar confirmados
-        participants = inscriptions[
-            (inscriptions['Categoria'] == category) & 
-            (inscriptions['Estado_Pago'] == 'Confirmado')
-        ].to_dict('records')
+        # Crear nueva fila
+        nueva_fila = pd.DataFrame([datos])
         
-        n = len(participants)
-        if n < 2: return False
-        
-        # Calcular slots (potencia de 2)
-        slots = 2**math.ceil(math.log2(n))
-        random.shuffle(participants)
-        
-        # Añadir BYEs
-        bracket_participants = participants + [{"Nombre_Completo": "BYE", "ID": "BYE", "Dojo": ""}] * (slots - n)
-        
-        # Limpiar brackets previos
-        brackets = brackets[brackets['Category'] != category]
-        new_matches = []
-        
-        # Estructura de rondas
-        rounds = int(math.log2(slots))
-        round_names = ["Ronda 1", "Ronda 2", "Cuartos", "Semifinal", "Final"]
-        
-        # Generar R1 con jugadores
-        for i in range(slots // 2):
-            p1 = bracket_participants[i*2]
-            p2 = bracket_participants[i*2+1]
-            
-            match = {
-                "Category": category, "Match_ID": f"R1-M{i+1}", "Round": round_names[0] if rounds > 1 else "Final",
-                "Match_Number": i+1, "P1_Name": p1['Nombre_Completo'], "P1_ID": p1['ID'], "P1_Dojo": p1['Dojo'], "P1_Votes": 0,
-                "P2_Name": p2['Nombre_Completo'], "P2_ID": p2['ID'], "P2_Dojo": p2['Dojo'], "P2_Votes": 0,
-                "Winner": "", "Winner_ID": "", "Status": "Live"
-            }
-            
-            # Lógica automática de BYE
-            if p2['ID'] == 'BYE':
-                match.update({"Winner": p1['Nombre_Completo'], "Winner_ID": p1['ID'], "Status": "Completed", "P2_Name": "BYE"})
-            
-            # Calcular siguiente match
-            if rounds > 1:
-                match["Next_Match"] = f"R2-M{(i//2)+1}"
-                match["Next_Pos"] = "top" if i % 2 == 0 else "bottom"
-            else:
-                match["Next_Match"] = "CHAMPION"
-                
-            new_matches.append(match)
-            
-        # Generar rondas vacías subsiguientes
-        matches_in_round = slots // 2
-        for r in range(2, rounds + 1):
-            matches_in_round //= 2
-            r_name = "Final" if r == rounds else f"Ronda {r}"
-            
-            for m in range(1, matches_in_round + 1):
-                new_matches.append({
-                    "Category": category, "Match_ID": f"R{r}-M{m}", "Round": r_name,
-                    "Match_Number": m, "P1_Name": "", "P1_ID": "", "P1_Votes": 0, "P2_Name": "", "P2_ID": "", "P2_Votes": 0,
-                    "Winner": "", "Winner_ID": "", "Status": "Pending",
-                    "Next_Match": f"R{r+1}-M{(m+1)//2}" if r < rounds else "CHAMPION",
-                    "Next_Pos": "top" if m % 2 != 0 else "bottom"
-                })
+        # Combinar
+        if df_existente.empty:
+            df_final = nueva_fila
+        else:
+            df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
         
         # Guardar
-        full_df = pd.concat([brackets, pd.DataFrame(new_matches)], ignore_index=True)
+        conn.update(
+            spreadsheet=SHEET_URL,
+            worksheet="Inscripciones",
+            data=df_final
+        )
         
-        # Propagar BYEs iniciales
-        # (Aquí iría una función recursiva para mover ganadores de BYE a R2, simplificado por ahora)
-        
-        save_data(full_df, "brackets")
+        # Backup automático
+        try:
+            conn.update(
+                spreadsheet=SHEET_URL,
+                worksheet="Backup",
+                data=df_final
+            )
+        except:
+            pass
+            
         return True
     except Exception as e:
-        log_event("ERROR_GEN_BRACKETS", str(e))
+        logger.error(f"Error guardando inscripción: {e}")
         return False
 
-def render_brackets_view():
-    """Visualización Horizontal de Brackets"""
-    cat = st.session_state.get('cat', ALL_CATEGORIES[0])
-    st.markdown(f"### 🏆 {cat}")
-    
-    df = load_data("brackets")
-    cat_df = df[df['Category'] == cat]
-    
-    if cat_df.empty:
-        st.info("Brackets no generados aún.")
-        return
-
-    # Obtener rondas únicas ordenadas
-    rounds = cat_df['Round'].unique().tolist()
-    # Orden personalizado simple: R1 -> R2 -> ... -> Final
-    rounds.sort(key=lambda x: (len(x), x)) 
-    
-    html = '<div class="bracket-wrapper">'
-    
-    for r in rounds:
-        matches = cat_df[cat_df['Round'] == r].sort_values('Match_Number')
-        html += f'<div class="bracket-round"><div class="round-header">{r}</div>'
+def guardar_pago(datos_pago):
+    """Guarda información del pago en sheets"""
+    try:
+        conn = get_connection()
+        df_pagos = conn.read(spreadsheet=SHEET_URL, worksheet="Pagos")
         
-        for _, m in matches.iterrows():
-            # Clases de ganador
-            w1 = "winner" if str(m['Winner_ID']) == str(m['P1_ID']) and m['P1_ID'] else ""
-            w2 = "winner" if str(m['Winner_ID']) == str(m['P2_ID']) and m['P2_ID'] else ""
-            
-            p1_n = m['P1_Name'] if m['P1_Name'] else "TBD"
-            p2_n = m['P2_Name'] if m['P2_Name'] else "TBD"
-            
-            html += f"""
-            <div class="bracket-match">
-                <div class="bracket-player top {w1}">
-                    <div class="player-info">
-                        <span class="player-name">{p1_n}</span>
-                        <span class="player-dojo">{m['P1_Dojo'] if not pd.isna(m['P1_Dojo']) else ''}</span>
-                    </div>
-                    <span class="vote-count">{int(m['P1_Votes']) if m['P1_Votes'] else 0}</span>
-                </div>
-                <div class="bracket-player bottom {w2}">
-                    <div class="player-info">
-                        <span class="player-name">{p2_n}</span>
-                        <span class="player-dojo">{m['P2_Dojo'] if not pd.isna(m['P2_Dojo']) else ''}</span>
-                    </div>
-                    <span class="vote-count">{int(m['P2_Votes']) if m['P2_Votes'] else 0}</span>
-                </div>
-            </div>
-            """
-        html += '</div>'
-    html += '</div>'
-    
-    st.markdown(html, unsafe_allow_html=True)
-    
-    # Sistema de Votación (Solo Matches Activos)
-    st.markdown("### 🗳️ Votación en Vivo")
-    live_matches = cat_df[cat_df['Status'] == 'Live']
-    
-    if live_matches.empty:
-        st.info("No hay combates activos para votar en este momento.")
-    else:
-        for _, match in live_matches.iterrows():
-            with st.container():
-                col1, col2, col3 = st.columns([1, 0.5, 1])
-                with col1:
-                    if st.button(f"👍 {match['P1_Name']}", key=f"v1_{match['Match_ID']}", use_container_width=True):
-                        register_vote(match['Match_ID'], match['P1_ID'])
-                with col2:
-                    st.markdown(f"<div style='text-align:center; font-weight:bold; font-size:20px;'>VS</div>", unsafe_allow_html=True)
-                with col3:
-                    if st.button(f"👍 {match['P2_Name']}", key=f"v2_{match['Match_ID']}", use_container_width=True):
-                        register_vote(match['Match_ID'], match['P2_ID'])
-
-def register_vote(match_id, player_id):
-    """Registra voto y avanza ronda si corresponde"""
-    df = load_data("brackets")
-    mask = (df['Match_ID'] == match_id)
-    
-    if not df[mask].empty:
-        # Incrementar voto
-        col = 'P1_Votes' if df.loc[mask, 'P1_ID'].values[0] == player_id else 'P2_Votes'
-        df.loc[mask, col] = df.loc[mask, col].fillna(0) + 1
+        nueva_fila = pd.DataFrame([datos_pago])
         
-        # Verificar ganador (Ejemplo: al llegar a 10 votos o manual)
-        # Aquí podrías añadir lógica: "Si votos > X, avanza"
+        if df_pagos.empty:
+            df_final = nueva_fila
+        else:
+            df_final = pd.concat([df_pagos, nueva_fila], ignore_index=True)
         
-        save_data(df, "brackets")
-        st.success("✅ Voto registrado")
-        st.rerun()
+        conn.update(
+            spreadsheet=SHEET_URL,
+            worksheet="Pagos",
+            data=df_final
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error guardando pago: {e}")
+        return False
 
-# --- 8. VISTAS PRINCIPALES ---
-def render_header():
+# --- 5. MERCADOPAGO ---
+@st.cache_resource
+def init_mercadopago():
+    """Inicializa SDK de MercadoPago"""
+    try:
+        access_token = st.secrets["mercadopago"]["access_token"]
+        return mercadopago.SDK(access_token)
+    except Exception as e:
+        logger.error(f"Error inicializando MercadoPago: {e}")
+        return None
+
+def crear_preferencia_pago(datos_comprador, preferencia_id):
+    """Crea una preferencia de pago en MercadoPago"""
+    sdk = init_mercadopago()
+    if not sdk:
+        return None
+    
+    # Datos del comprador
+    comprador = datos_comprador["comprador"]
+    items = datos_comprador["items"]
+    
+    # Crear preferencia
+    preference_data = {
+        "items": [
+            {
+                "title": f"Inscripción Torneo WKB - {items['categoria']}",
+                "quantity": 1,
+                "currency_id": "CLP",
+                "unit_price": PRECIO_INSCRIPCION,
+                "description": f"Competidor: {comprador['nombre']} - Dojo: {comprador['dojo']}"
+            }
+        ],
+        "payer": {
+            "name": comprador["nombre"],
+            "email": comprador["email"],
+            "phone": {
+                "number": comprador["telefono"]
+            }
+        },
+        "back_urls": {
+            "success": "https://wkb-torneo.streamlit.app/?success=true",
+            "failure": "https://wkb-torneo.streamlit.app/?failure=true",
+            "pending": "https://wkb-torneo.streamlit.app/?pending=true"
+        },
+        "auto_return": "approved",
+        "external_reference": preferencia_id,
+        "notification_url": "https://tu-dominio.com/webhook/mercadopago",
+        "statement_descriptor": "WKB CHILE",
+        "payment_methods": {
+            "excluded_payment_types": [
+                {"id": "atm"},
+                {"id": "ticket"}
+            ],
+            "installments": 1
+        }
+    }
+    
+    try:
+        preference_response = sdk.preference().create(preference_data)
+        if preference_response["status"] == 201:
+            return preference_response["response"]
+        else:
+            logger.error(f"Error creando preferencia: {preference_response}")
+            return None
+    except Exception as e:
+        logger.error(f"Excepción en MercadoPago: {e}")
+        return None
+
+def verificar_pago(payment_id):
+    """Verifica el estado de un pago"""
+    sdk = init_mercadopago()
+    if not sdk:
+        return None
+    
+    try:
+        payment_info = sdk.payment().get(payment_id)
+        if payment_info["status"] == 200:
+            return payment_info["response"]
+        return None
+    except:
+        return None
+
+# --- 6. VALIDACIONES ---
+def validar_email(email):
+    """Valida formato de email"""
+    patron = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+    return re.match(patron, email) is not None
+
+def validar_telefono(telefono):
+    """Valida teléfono chileno"""
+    telefono = re.sub(r'\D', '', telefono)
+    patron = r'^(9|2)[0-9]{8}$'
+    return re.match(patron, telefono) is not None
+
+def generar_id_unico():
+    """Genera ID único para la inscripción"""
+    return str(uuid.uuid4()).replace('-', '')[:12].upper()
+
+# --- 7. FORMULARIO DE INSCRIPCIÓN ---
+def render_formulario():
+    """Renderiza el formulario de inscripción"""
+    
+    st.markdown('<h1 class="title">🥋 INSCRIPCIÓN TORNEO WKB</h1>', unsafe_allow_html=True)
+    
+    # Logo y banner
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.image("https://inertiax.store/cdn/shop/files/wmremove-transformed-removebg-preview.png", use_container_width=True)
+    
+    # Información del torneo
     st.markdown("""
-    <div class="header-container">
-        <div style="display:flex; align-items:center;">
-            <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s" style="height:50px; margin-right:15px;">
-            <div>
-                <h1 style="margin:0; font-size:24px; color:white;">WKB CHILE</h1>
-                <p style="margin:0; color:#FDB931; font-size:12px;">OFFICIAL TOURNAMENT HUB</p>
-            </div>
-        </div>
-        <div>
-            <img src="https://inertiax.store/cdn/shop/files/wmremove-transformed-removebg-preview.png?v=1743950875&width=500" style="height:40px;">
-        </div>
+    <div class="card">
+        <h3 style="color:#FDB931; margin-top:0;">📅 Información del Torneo</h3>
+        <p style="color:#e5e7eb;">📍 Fecha: 15-16 Marzo 2025</p>
+        <p style="color:#e5e7eb;">🏟️ Lugar: Gimnasio Polideportivo, Santiago</p>
+        <p style="color:#e5e7eb;">⏰ Peso: 09:00 hrs</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Precio
+    st.markdown(f"""
+    <div class="price-tag">
+        💰 VALOR INSCRIPCIÓN: ${PRECIO_INSCRIPCION:,} CLP
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Inicializar estado
+    if 'paso' not in st.session_state:
+        st.session_state.paso = 'formulario'
+    if 'datos_competidor' not in st.session_state:
+        st.session_state.datos_competidor = {}
+    if 'preferencia_id' not in st.session_state:
+        st.session_state.preferencia_id = None
+    
+    # Flujo de inscripción
+    if st.session_state.paso == 'formulario':
+        render_paso1()
+    elif st.session_state.paso == 'pago':
+        render_paso2()
+    elif st.session_state.paso == 'confirmacion':
+        render_paso3()
+    elif st.session_state.paso == 'error':
+        render_error()
+
+def render_paso1():
+    """Paso 1: Formulario de datos"""
+    
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 📝 Datos del Competidor")
+    
+    with st.form("form_inscripcion"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            nombre = st.text_input("Nombre Completo *", 
+                                  placeholder="Ej: Juan Pérez González")
+            edad = st.number_input("Edad *", min_value=18, max_value=99, step=1)
+            email = st.text_input("Email *", 
+                                 placeholder="ejemplo@correo.com")
+        
+        with col2:
+            dojo = st.text_input("Dojo/Escuela *", 
+                                placeholder="Ej: WKB Santiago")
+            telefono = st.text_input("Teléfono *", 
+                                    placeholder="Ej: 912345678")
+            categoria = st.selectbox("Categoría *", CATEGORIAS)
+        
+        # Términos y condiciones
+        st.markdown("---")
+        acepta = st.checkbox("Acepto los términos y condiciones del torneo *")
+        
+        # Botón submit
+        submit = st.form_submit_button("CONTINUAR AL PAGO", 
+                                       use_container_width=True,
+                                       type="primary")
+        
+        if submit:
+            # Validaciones
+            errores = []
+            if not nombre:
+                errores.append("Nombre es obligatorio")
+            if not email or not validar_email(email):
+                errores.append("Email inválido")
+            if not telefono or not validar_telefono(telefono):
+                errores.append("Teléfono inválido (formato: 912345678)")
+            if not dojo:
+                errores.append("Dojo es obligatorio")
+            if not acepta:
+                errores.append("Debes aceptar los términos")
+            
+            if errores:
+                for error in errores:
+                    st.error(error)
+            else:
+                # Guardar datos
+                st.session_state.datos_competidor = {
+                    "nombre": nombre,
+                    "edad": edad,
+                    "email": email,
+                    "dojo": dojo,
+                    "telefono": telefono,
+                    "categoria": categoria,
+                    "id_inscripcion": generar_id_unico(),
+                    "fecha_registro": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.paso = 'pago'
+                st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Footer con información de pago
+    st.markdown("""
+    <div style="text-align:center; color:#9ca3af; font-size:12px; margin-top:30px;">
+        <p>🔒 Pago procesado por MercadoPago</p>
+        <p>Aceptamos tarjetas de crédito, débito y transferencia</p>
     </div>
     """, unsafe_allow_html=True)
 
-def render_home():
-    render_header()
+def render_paso2():
+    """Paso 2: Procesar pago"""
     
-    tabs = st.tabs(["🏆 COMPETENCIA", "📝 INSCRIPCIÓN", "⚙️ ADMIN"])
+    datos = st.session_state.datos_competidor
     
-    with tabs[0]:
-        st.markdown("### Selecciona una Categoría para ver los Brackets")
-        cols = st.columns(3)
-        for i, cat in enumerate(ALL_CATEGORIES):
-            with cols[i % 3]:
-                if st.button(cat.split(" | ")[-1], key=cat, use_container_width=True):
-                    st.session_state.view = "BRACKET"
-                    st.session_state.cat = cat
-                    st.rerun()
-
-    with tabs[1]:
-        render_inscription_form()
-        
-    with tabs[2]:
-        render_admin_panel()
-
-def render_inscription_form():
-    st.markdown("### 📝 Nueva Inscripción")
-    with st.form("inscription"):
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input("Nombre Completo")
-            age = st.number_input("Edad", 18, 99)
-        with col2:
-            dojo = st.text_input("Dojo")
-            cat = st.selectbox("Categoría", ALL_CATEGORIES)
-        
-        if st.form_submit_button("Ir al Pago", use_container_width=True):
-            if name and dojo:
-                st.session_state.temp_user = {"Nombre_Completo": name, "Categoria": cat, "Dojo": dojo, "ID": str(uuid.uuid4())[:8]}
-                st.session_state.view = "PAYMENT"
-                st.rerun()
-            else:
-                st.error("Faltan datos")
-
-def render_payment():
-    render_header()
-    st.markdown("### 💳 Confirmación de Pago")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 💳 Confirmar y Pagar")
     
-    user = st.session_state.get('temp_user', {})
-    st.info(f"Vas a inscribir a **{user.get('Nombre_Completo')}** en **{user.get('Categoria')}**")
+    # Resumen de inscripción
+    st.markdown("""
+    <style>
+        .resumen-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #374151;
+        }
+        .resumen-label {
+            color: #9ca3af;
+        }
+        .resumen-value {
+            color: #FDB931;
+            font-weight: bold;
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
-    # Botón simulado para desarrollo
-    if st.button("✅ Confirmar Pago (Simulación)", type="primary", use_container_width=True):
-        df = load_data("inscriptions")
-        new_row = pd.DataFrame([user | {
-            "Estado_Pago": "Confirmado", 
-            "Fecha": datetime.datetime.now().strftime("%Y-%m-%d"),
-            "Codigo_Pago": str(uuid.uuid4())[:6]
-        }])
-        save_data(pd.concat([df, new_row]), "inscriptions")
-        st.balloons()
-        st.success("¡Inscripción Exitosa!")
-        time.sleep(2)
-        st.session_state.view = "HOME"
-        st.rerun()
-        
-    if st.button("Cancelar"):
-        st.session_state.view = "HOME"
-        st.rerun()
-
-def render_admin_panel():
-    st.write("Panel de Administración")
-    password = st.text_input("Contraseña", type="password")
-    if password == "wkbadmin123": # En producción usar hash
-        if st.button("Generar Brackets para Todas las Categorías"):
-            with st.status("Generando..."):
-                for c in ALL_CATEGORIES:
-                    generate_dynamic_brackets(c)
-            st.success("Brackets listos!")
-        
-        if st.button("Resetear Base de Datos (Peligro)"):
-            # Lógica de reset aquí
-            pass
-
-# --- 9. EJECUCIÓN ---
-def main():
-    if 'view' not in st.session_state: st.session_state.view = "HOME"
+    col1, col2 = st.columns(2)
     
-    if st.session_state.view == "HOME": render_home()
-    elif st.session_state.view == "BRACKET": 
-        render_header()
-        if st.button("⬅ Volver"): 
-            st.session_state.view = "HOME"
+    with col1:
+        st.markdown(f"""
+        <div class="resumen-item">
+            <span class="resumen-label">Competidor:</span>
+            <span class="resumen-value">{datos['nombre']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">Categoría:</span>
+            <span class="resumen-value">{datos['categoria']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">Dojo:</span>
+            <span class="resumen-value">{datos['dojo']}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="resumen-item">
+            <span class="resumen-label">Email:</span>
+            <span class="resumen-value">{datos['email']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">Teléfono:</span>
+            <span class="resumen-value">{datos['telefono']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">ID:</span>
+            <span class="resumen-value">{datos['id_inscripcion']}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Total
+    st.markdown(f"""
+    <div style="background: #111827; padding: 15px; border-radius: 10px; margin: 20px 0;">
+        <div style="display: flex; justify-content: space-between;">
+            <span style="color: #e5e7eb; font-size: 18px;">Total a pagar:</span>
+            <span style="color: #FDB931; font-size: 24px; font-weight: bold;">${PRECIO_INSCRIPCION:,} CLP</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Botones
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("← VOLVER", use_container_width=True):
+            st.session_state.paso = 'formulario'
             st.rerun()
-        render_brackets_view()
-    elif st.session_state.view == "PAYMENT": render_payment()
+    
+    with col2:
+        if st.button("PAGAR AHORA 💳", type="primary", use_container_width=True):
+            with st.spinner("Preparando pago..."):
+                # Crear preferencia en MercadoPago
+                preferencia_id = f"WKB-{datos['id_inscripcion']}-{int(time.time())}"
+                
+                datos_pago = {
+                    "comprador": {
+                        "nombre": datos["nombre"],
+                        "email": datos["email"],
+                        "telefono": datos["telefono"]
+                    },
+                    "items": {
+                        "categoria": datos["categoria"]
+                    }
+                }
+                
+                preferencia = crear_preferencia_pago(datos_pago, preferencia_id)
+                
+                if preferencia and "init_point" in preferencia:
+                    # Guardar referencia
+                    st.session_state.preferencia_id = preferencia_id
+                    
+                    # Mostrar link de pago
+                    st.markdown(f"""
+                    <div style="text-align: center; margin: 20px 0;">
+                        <a href="{preferencia['init_point']}" target="_blank">
+                            <button style="background: #00aaff; color: white; padding: 15px 30px; 
+                                         border: none; border-radius: 10px; font-size: 18px; 
+                                         font-weight: bold; cursor: pointer;">
+                                🔗 HAZ CLIC PARA PAGAR
+                            </button>
+                        </a>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.info("⚠️ Después de pagar, espera la confirmación automática")
+                    
+                    # Botón para simular pago (desarrollo)
+                    if st.button("✅ SIMULAR PAGO EXITOSO (solo pruebas)", use_container_width=True):
+                        st.session_state.paso = 'confirmacion'
+                        st.rerun()
+                else:
+                    st.error("Error al crear el pago. Intenta nuevamente.")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+def render_paso3():
+    """Paso 3: Confirmación exitosa"""
+    
+    datos = st.session_state.datos_competidor
+    
+    # Guardar en sheets
+    with st.spinner("Confirmando inscripción..."):
+        # Datos para guardar
+        registro = {
+            "ID_Inscripcion": datos["id_inscripcion"],
+            "Fecha_Registro": datos["fecha_registro"],
+            "Nombre_Completo": datos["nombre"],
+            "Edad": datos["edad"],
+            "Email": datos["email"],
+            "Telefono": datos["telefono"],
+            "Dojo": datos["dojo"],
+            "Categoria": datos["categoria"],
+            "Estado_Pago": "Confirmado",
+            "Monto_Pagado": PRECIO_INSCRIPCION,
+            "Metodo_Pago": "MercadoPago",
+            "Preferencia_ID": st.session_state.get("preferencia_id", ""),
+            "Fecha_Pago": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Guardar en sheets
+        if guardar_inscripcion(registro):
+            # Guardar también en la hoja de pagos
+            pago = {
+                "ID_Inscripcion": datos["id_inscripcion"],
+                "Nombre": datos["nombre"],
+                "Monto": PRECIO_INSCRIPCION,
+                "Fecha": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Estado": "aprobado",
+                "Metodo": "MercadoPago"
+            }
+            guardar_pago(pago)
+            
+            # Mostrar confirmación
+            st.balloons()
+            
+            st.markdown(f"""
+            <div class="success-message">
+                <h2>✅ ¡INSCRIPCIÓN CONFIRMADA!</h2>
+                <p style="font-size: 18px; margin: 20px 0;">
+                    Gracias por inscribirte al Torneo WKB 2025
+                </p>
+                <div style="background: #0e1117; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                    <p><strong>ID de Inscripción:</strong> {datos['id_inscripcion']}</p>
+                    <p><strong>Competidor:</strong> {datos['nombre']}</p>
+                    <p><strong>Categoría:</strong> {datos['categoria']}</p>
+                    <p><strong>Dojo:</strong> {datos['dojo']}</p>
+                </div>
+                <p>Te enviaremos un email con más información a <strong>{datos['email']}</strong></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Botón para nueva inscripción
+            if st.button("📝 NUEVA INSCRIPCIÓN", use_container_width=True):
+                # Limpiar estado
+                for key in ['paso', 'datos_competidor', 'preferencia_id']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.rerun()
+        else:
+            st.error("Error guardando la inscripción. Contacta al organizador.")
+            st.session_state.paso = 'error'
+            st.rerun()
+
+def render_error():
+    """Muestra error en el proceso"""
+    
+    st.markdown("""
+    <div class="error-message">
+        <h2>❌ ERROR EN LA INSCRIPCIÓN</h2>
+        <p>Hubo un problema procesando tu inscripción.</p>
+        <p>Por favor, intenta nuevamente o contacta a los organizadores.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if st.button("🔄 INTENTAR NUEVAMENTE", use_container_width=True):
+        for key in ['paso', 'datos_competidor', 'preferencia_id']:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+
+# --- 8. PANEL ADMIN SIMPLE ---
+def render_admin():
+    """Panel de administración básico"""
+    
+    st.markdown('<h1 class="title">⚙️ PANEL ADMIN</h1>', unsafe_allow_html=True)
+    
+    password = st.text_input("Contraseña", type="password")
+    
+    if password == "wkbadmin2025":  # Cambiar en producción
+        # Cargar datos
+        df = cargar_inscripciones()
+        
+        if not df.empty:
+            st.success(f"Total inscripciones: {len(df)}")
+            
+            # Estadísticas
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                confirmados = len(df[df['Estado_Pago'] == 'Confirmado'])
+                st.metric("✅ Confirmados", confirmados)
+            with col2:
+                pendientes = len(df[df['Estado_Pago'] != 'Confirmado'])
+                st.metric("⏳ Pendientes", pendientes)
+            with col3:
+                st.metric("💰 Total recaudado", f"${len(df[df['Estado_Pago'] == 'Confirmado']) * PRECIO_INSCRIPCION:,}")
+            
+            # Mostrar datos
+            st.dataframe(df, use_container_width=True)
+            
+            # Descargar CSV
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "📥 Descargar CSV",
+                csv,
+                "inscripciones_wkb.csv",
+                "text/csv"
+            )
+        else:
+            st.info("No hay inscripciones aún")
+
+# --- 9. MAIN ---
+def main():
+    """Función principal"""
+    
+    # Parámetros de URL
+    query_params = st.query_params
+    
+    # Verificar retorno de pago
+    if "success" in query_params and query_params["success"] == "true":
+        if 'paso' in st.session_state and st.session_state.paso == 'pago':
+            st.session_state.paso = 'confirmacion'
+            st.rerun()
+    
+    # Navegación
+    st.sidebar.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", width=100)
+    st.sidebar.title("WKB CHILE")
+    
+    opcion = st.sidebar.radio("Menú", ["📝 Inscripción", "⚙️ Admin"])
+    
+    if opcion == "📝 Inscripción":
+        render_formulario()
+    else:
+        render_admin()
 
 if __name__ == "__main__":
     main()
