@@ -3,328 +3,218 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import mercadopago
 import uuid
-import datetime
+from datetime import datetime
 import re
-import time
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="WKB Inscripciones",
+    page_title="WKB Chile | Registro Oficial",
     page_icon="🥋",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- CONSTANTES ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1hFlkSSPWqoQDSjkiPV5uaIIx-iHjoihLg2yokDJm-4E/edit?gid=0#gid=0"
-PRECIO = 15000
-CODIGO_SECRETO = "WKB2025"  # Código para pagos gratis (pruebas)
+# --- ESTILOS PERSONALIZADOS ---
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stButton>button { border-radius: 5px; height: 3em; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
+# --- CONSTANTES Y CONFIGURACIÓN ---
+PRECIO = 15000
 CATEGORIAS = [
-    "KUMITE -65kg (18+)",
-    "KUMITE -70kg (18+)",
-    "KUMITE -75kg (18+)",
-    "KUMITE -80kg (18+)",
-    "KUMITE -90kg (18+)",
-    "KUMITE +90kg (18+)",
-    "KUMITE -55kg (18+) Femenino",
-    "KUMITE -60kg (18+) Femenino",
-    "KUMITE +65kg (18+) Femenino",
-    "KATA (18+) Mixto"
+    "KUMITE -65kg (18+)", "KUMITE -70kg (18+)", "KUMITE -75kg (18+)",
+    "KUMITE -80kg (18+)", "KUMITE -90kg (18+)", "KUMITE +90kg (18+)",
+    "KUMITE -55kg (18+) Femenino", "KUMITE -60kg (18+) Femenino",
+    "KUMITE +65kg (18+) Femenino", "KATA (18+) Mixto"
 ]
 
-# --- CONEXIÓN SHEETS ---
-@st.cache_resource
-def get_connection():
+# --- LÓGICA DE DATOS ---
+def get_conn():
     return st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_datos():
-    """Carga todos los datos del sheets"""
+    conn = get_conn()
     try:
-        conn = get_connection()
-        return conn.read(worksheet="Inscripciones")
-    except:
-        return pd.DataFrame()
+        # Forzamos ttl=0 para datos críticos de inscripción
+        return conn.read(worksheet="Inscripciones", ttl=0)
+    except Exception:
+        return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Dojo", "Categoria", "Estado"])
 
-def guardar_inscripcion(datos):
-    """Guarda en sheets"""
+def validar_email(email):
+    return re.match(r"[^@]+@[^@]+\.[^@]+", email)
+
+# --- INTEGRACIÓN MERCADOPAGO ---
+def generar_link_pago(datos):
     try:
-        conn = get_connection()
-        df_existente = cargar_datos()
-        
-        nueva_fila = pd.DataFrame([datos])
-        
-        if df_existente.empty:
-            df_final = nueva_fila
-        else:
-            df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
-        
-        conn.update(worksheet="Inscripciones", data=df_final)
-        return True
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return False
-
-# --- MERCADOPAGO ---
-@st.cache_resource
-def init_mp():
-    try:
-        return mercadopago.SDK(st.secrets["mercadopago"]["access_token"])
-    except:
-        return None
-
-def crear_pago_mp(nombre, email, categoria):
-    sdk = init_mp()
-    if not sdk:
-        return None
-    
-    preference_data = {
-        "items": [
-            {
-                "title": f"Inscripción WKB - {categoria}",
+        sdk = mercadopago.SDK(st.secrets["mercadopago"]["access_token"])
+        preference_data = {
+            "items": [{
+                "title": f"Inscripción Torneo WKB - {datos['categoria']}",
                 "quantity": 1,
-                "currency_id": "CLP",
                 "unit_price": PRECIO,
-            }
-        ],
-        "payer": {"name": nombre, "email": email},
-        "back_urls": {
-            "success": "https://wkbchile.streamlit.app/?success=1",
-            "failure": "https://wkbchile.streamlit.app/?failure=1",
-        },
-        "auto_return": "approved",
-    }
-    
-    try:
-        preference = sdk.preference().create(preference_data)
-        if preference["status"] == 201:
-            return preference["response"]["init_point"]
-    except:
+                "currency_id": "CLP"
+            }],
+            "payer": {"email": datos['email'], "name": datos['nombre']},
+            "back_urls": {
+                "success": "https://wkbchile.streamlit.app/", # Cambiar por tu URL real
+                "failure": "https://wkbchile.streamlit.app/"
+            },
+            "auto_return": "approved",
+            "external_reference": datos['id']
+        }
+        result = sdk.preference().create(preference_data)
+        return result["response"]["init_point"]
+    except Exception as e:
+        st.error(f"Error al conectar con MercadoPago: {e}")
         return None
 
-# --- ESTADÍSTICAS ---
-def mostrar_estadisticas(df):
-    """Muestra contadores por categoría"""
-    if df.empty:
-        st.warning("No hay inscritos aún")
-        return
-    
-    # Total
-    st.metric("TOTAL INSCRITOS", len(df))
-    
-    # Por categoría
-    st.subheader("📊 Inscritos por Categoría")
-    cols = st.columns(3)
-    
-    categorias_counts = df['Categoria'].value_counts()
-    
-    for i, (cat, count) in enumerate(categorias_counts.items()):
-        with cols[i % 3]:
-            st.info(f"**{cat}**\n\n{count} inscritos")
-
-# --- FORMULARIO DE INSCRIPCIÓN ---
-def formulario_inscripcion():
-    st.header("📝 NUEVA INSCRIPCIÓN")
-    
-    with st.form("form_inscripcion"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            nombre = st.text_input("Nombre Completo *")
-            edad = st.number_input("Edad *", 18, 99, 25)
-            email = st.text_input("Email *")
-        
-        with col2:
-            dojo = st.text_input("Dojo *")
-            telefono = st.text_input("Teléfono *")
-            categoria = st.selectbox("Categoría *", CATEGORIAS)
-        
-        submitted = st.form_submit_button("CONTINUAR AL PAGO", use_container_width=True)
-        
-        if submitted:
-            if nombre and email and dojo and telefono:
-                st.session_state['temp_inscripcion'] = {
-                    'nombre': nombre,
-                    'edad': edad,
-                    'email': email,
-                    'dojo': dojo,
-                    'telefono': telefono,
-                    'categoria': categoria,
-                    'id': str(uuid.uuid4())[:8].upper()
-                }
-                st.session_state['paso'] = 'pago'
-                st.rerun()
-            else:
-                st.error("Completa todos los campos")
-
-# --- PANTALLA DE PAGO ---
-def pantalla_pago():
-    datos = st.session_state['temp_inscripcion']
-    
-    st.header("💰 CONFIRMAR PAGO")
-    st.info(f"**Inscribiendo a:** {datos['nombre']}")
-    st.info(f"**Categoría:** {datos['categoria']}")
-    st.info(f"**Total a pagar:** ${PRECIO:,}")
-    
-    tab1, tab2 = st.tabs(["💳 MercadoPago", "🔑 Ingresar Código"])
-    
-    with tab1:
-        st.write("Paga con tarjeta de crédito/débito")
-        
-        if st.button("GENERAR LINK DE PAGO", use_container_width=True):
-            link = crear_pago_mp(datos['nombre'], datos['email'], datos['categoria'])
-            if link:
-                st.markdown(f"[➡️ HACER CLIC PARA PAGAR]({link})")
-                st.info("Después de pagar, espera la confirmación")
-                
-                # Botón simulación
-                if st.button("✅ SIMULAR PAGO EXITOSO"):
-                    st.session_state['paso'] = 'confirmar'
-                    st.rerun()
-            else:
-                st.error("Error con MercadoPago")
-    
-    with tab2:
-        st.write("Ingresa el código de acceso")
-        codigo = st.text_input("Código", type="password")
-        
-        if st.button("VALIDAR CÓDIGO", use_container_width=True):
-            if codigo == CODIGO_SECRETO:
-                st.session_state['paso'] = 'confirmar'
-                st.rerun()
-            else:
-                st.error("Código incorrecto")
-    
-    if st.button("⬅️ VOLVER"):
-        st.session_state['paso'] = 'formulario'
-        st.rerun()
-
-# --- CONFIRMACIÓN Y GUARDADO ---
-def confirmar_inscripcion():
-    datos = st.session_state['temp_inscripcion']
-    
-    fecha = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    registro = {
-        "ID": datos['id'],
-        "Fecha": fecha,
-        "Nombre": datos['nombre'],
-        "Edad": datos['edad'],
-        "Email": datos['email'],
-        "Telefono": datos['telefono'],
-        "Dojo": datos['dojo'],
-        "Categoria": datos['categoria'],
-        "Estado": "Confirmado",
-        "Monto": PRECIO,
-        "Metodo": "MercadoPago/Código"
-    }
-    
-    if guardar_inscripcion(registro):
-        st.balloons()
-        st.success(f"✅ ¡INSCRIPCIÓN CONFIRMADA!\n\nID: {datos['id']}")
-        
-        # Limpiar sesión
-        if st.button("📝 NUEVA INSCRIPCIÓN"):
-            for key in ['temp_inscripcion', 'paso']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
-    else:
-        st.error("Error guardando")
-
-# --- PANEL ADMIN BÁSICO ---
-def panel_admin():
-    st.header("⚙️ ADMINISTRACIÓN")
-    
-    password = st.text_input("Contraseña", type="password")
-    
-    if password == "admin123":
-        df = cargar_datos()
+# --- COMPONENTES DE INTERFAZ ---
+def sidebar_stats(df):
+    with st.sidebar:
+        st.image("https://cdn-icons-png.flaticon.com/512/3003/3003831.png", width=100) # Reemplazar con logo WKB
+        st.title("Panel de Control")
         
         if not df.empty:
-            st.subheader("Todas las inscripciones")
-            st.dataframe(df, use_container_width=True)
-            
-            # Exportar
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 DESCARGAR CSV", csv, "inscripciones.csv")
-            
-            # Estadísticas
-            st.subheader("Resumen")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total", len(df))
-            col2.metric("Confirmados", len(df[df['Estado'] == 'Confirmado']))
-            col3.metric("Monto total", f"${len(df) * PRECIO:,}")
-        else:
-            st.info("No hay datos")
+            confirmados = len(df[df['Estado'] == 'Confirmado'])
+            st.metric("Total Competidores", f"{confirmados} / 500")
+            st.progress(min(confirmados / 500, 1.0))
+        
+        st.divider()
+        st.info("📅 15-16 Marzo 2025\n\n📍 Gimnasio Polideportivo, Santiago")
 
-# --- MENÚ PRINCIPAL ---
+def formulario():
+    st.subheader("📝 Formulario de Inscripción")
+    
+    with st.container(border=True):
+        with st.form("registro_form", clear_on_submit=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                nombre = st.text_input("Nombre Completo")
+                email = st.text_input("Correo Electrónico")
+                telefono = st.text_input("WhatsApp (ej: +569...)")
+            
+            with col2:
+                dojo = st.text_input("Nombre del Dojo / Escuela")
+                edad = st.number_input("Edad", 5, 80, 18)
+                categoria = st.selectbox("Categoría de Competición", CATEGORIAS)
+            
+            st.markdown("---")
+            enviar = st.form_submit_button("VALIDAR Y PROCEDER AL PAGO", use_container_width=True)
+
+        if enviar:
+            if not nombre or not dojo or not validar_email(email):
+                st.error("Por favor, completa todos los campos correctamente.")
+            else:
+                st.session_state.temp_datos = {
+                    "id": str(uuid.uuid4())[:8].upper(),
+                    "nombre": nombre,
+                    "email": email,
+                    "telefono": telefono,
+                    "dojo": dojo,
+                    "edad": edad,
+                    "categoria": categoria
+                }
+                st.session_state.paso = "pago"
+                st.rerun()
+
+def checkout():
+    datos = st.session_state.temp_datos
+    st.subheader("💳 Confirmación de Pago")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.write("**Resumen de Inscripción:**")
+        st.json(datos)
+        if st.button("⬅️ Corregir Datos"):
+            st.session_state.paso = "registro"
+            st.rerun()
+
+    with col2:
+        st.warning("Para completar el registro, debes realizar el pago. Una vez aprobado, quedarás inscrito automáticamente.")
+        
+        link = generar_link_pago(datos)
+        if link:
+            st.link_button("🚀 PAGAR CON MERCADOPAGO", link, use_container_width=True, type="primary")
+            
+            st.divider()
+            with st.expander("¿Ya pagaste o tienes un código de cortesía?"):
+                codigo = st.text_input("Ingresar código")
+                if st.button("Validar Registro"):
+                    if codigo == st.secrets.get("admin_password", "WKB2025"):
+                        completar_registro(datos, "Cortesía/Admin")
+                    else:
+                        st.error("Código inválido")
+
+def completar_registro(datos, metodo):
+    with st.status("Procesando inscripción...", expanded=True) as status:
+        try:
+            conn = get_conn()
+            df_actual = cargar_datos()
+            
+            nuevo_registro = {
+                "ID": datos['id'],
+                "Fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "Nombre": datos['nombre'],
+                "Email": datos['email'],
+                "Dojo": datos['dojo'],
+                "Categoria": datos['categoria'],
+                "Estado": "Confirmado",
+                "Metodo": metodo
+            }
+            
+            df_final = pd.concat([df_actual, pd.DataFrame([nuevo_registro])], ignore_index=True)
+            conn.update(worksheet="Inscripciones", data=df_final)
+            
+            status.update(label="¡Inscripción Exitosa!", state="complete", expanded=False)
+            st.balloons()
+            st.success(f"Felicidades {datos['nombre']}, ya estás registrado.")
+            
+            # Limpieza de sesión
+            for key in ['temp_datos', 'paso']:
+                if key in st.session_state: del st.session_state[key]
+            
+            if st.button("Hacer otra inscripción"):
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error al guardar: {e}")
+
+# --- APP PRINCIPAL ---
 def main():
-    st.title("🥋 WKB CHILE - TORNEO 2025")
-    
-    # Menú de navegación simple
-    menu = st.sidebar.radio(
-        "Menú",
-        ["🏠 Inicio", "📝 Inscribirse", "👥 Ver inscritos", "⚙️ Admin"]
-    )
-    
-    # Cargar datos para estadísticas
-    df = cargar_datos()
-    df_confirmados = df[df['Estado'] == 'Confirmado'] if not df.empty else pd.DataFrame()
-    
-    # Sidebar con estadísticas siempre visible
-    with st.sidebar:
-        st.markdown("---")
-        st.subheader("📊 ESTADÍSTICAS")
-        
-        if not df_confirmados.empty:
-            st.metric("Total confirmados", len(df_confirmados))
-            
-            # Top 3 categorías
-            st.write("**Por categoría:**")
-            top_cats = df_confirmados['Categoria'].value_counts().head(3)
-            for cat, count in top_cats.items():
-                st.caption(f"• {cat[:20]}...: {count}")
+    if 'paso' not in st.session_state:
+        st.session_state.paso = "registro"
+
+    df_total = cargar_datos()
+    sidebar_stats(df_total)
+
+    tab_reg, tab_lista, tab_admin = st.tabs(["Registro", "Inscritos", "Administración"])
+
+    with tab_reg:
+        if st.session_state.paso == "registro":
+            formulario()
+        elif st.session_state.paso == "pago":
+            checkout()
+
+    with tab_lista:
+        st.subheader("Participantes Confirmados")
+        if not df_total.empty:
+            search = st.text_input("Buscar por nombre o dojo")
+            mask = df_total['Nombre'].str.contains(search, case=False) | df_total['Dojo'].str.contains(search, case=False)
+            st.dataframe(df_total[mask][["Nombre", "Dojo", "Categoria"]], use_container_width=True)
         else:
-            st.info("Sin inscritos aún")
-    
-    # Contenido según menú
-    if menu == "🏠 Inicio":
-        st.header("Bienvenido al Torneo WKB 2025")
-        st.write("📅 15-16 Marzo 2025")
-        st.write("📍 Gimnasio Polideportivo, Santiago")
-        
-        if not df_confirmados.empty:
-            mostrar_estadisticas(df_confirmados)
-    
-    elif menu == "📝 Inscribirse":
-        if 'paso' not in st.session_state:
-            st.session_state['paso'] = 'formulario'
-        
-        if st.session_state['paso'] == 'formulario':
-            formulario_inscripcion()
-        elif st.session_state['paso'] == 'pago':
-            pantalla_pago()
-        elif st.session_state['paso'] == 'confirmar':
-            confirmar_inscripcion()
-    
-    elif menu == "👥 Ver inscritos":
-        st.header("Lista de Inscritos")
-        
-        if not df_confirmados.empty:
-            # Filtro rápido
-            categoria_filtro = st.selectbox("Filtrar por categoría", ["Todas"] + CATEGORIAS)
-            
-            df_mostrar = df_confirmados.copy()
-            if categoria_filtro != "Todas":
-                df_mostrar = df_mostrar[df_mostrar['Categoria'] == categoria_filtro]
-            
-            st.dataframe(df_mostrar[['Nombre', 'Dojo', 'Categoria', 'Fecha']], use_container_width=True)
-            st.caption(f"Mostrando {len(df_mostrar)} inscritos")
-        else:
-            st.info("No hay inscritos confirmados")
-    
-    elif menu == "⚙️ Admin":
-        panel_admin()
+            st.info("Aún no hay inscritos.")
+
+    with tab_admin:
+        pw = st.text_input("Acceso Admin", type="password")
+        if pw == st.secrets.get("admin_password", "admin123"):
+            st.download_button("Descargar Base de Datos (CSV)", 
+                             df_total.to_csv(index=False), 
+                             "inscritos_wkb.csv", "text/csv")
+            st.dataframe(df_total)
 
 if __name__ == "__main__":
     main()
