@@ -35,6 +35,7 @@ st.markdown("""
         padding: 20px;
         border-radius: 10px;
         text-align: center;
+        margin: 20px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -106,7 +107,7 @@ def main():
     # Logo
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", use_container_width=True)
+        st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", width='stretch')
     
     # Información del torneo
     st.info("📅 15-16 Marzo 2025 | 📍 Gimnasio Polideportivo, Santiago")
@@ -132,66 +133,63 @@ def main():
             st.markdown("---")
             acepta = st.checkbox("Acepto los términos y condiciones del torneo *")
             
-            # Botón de envío
+            # ÚNICO BOTÓN DENTRO DEL FORM (st.form_submit_button)
             submit = st.form_submit_button("✅ INSCRIBIRME", type="primary", use_container_width=True)
-            
-            if submit:
-                # Validaciones
-                errores = []
-                if not nombre:
-                    errores.append("Nombre es obligatorio")
-                if not email or not validar_email(email):
-                    errores.append("Email inválido")
-                if not telefono or not validar_telefono(telefono):
-                    errores.append("Teléfono inválido (formato: 912345678)")
-                if not dojo:
-                    errores.append("Dojo es obligatorio")
-                if not acepta:
-                    errores.append("Debes aceptar los términos")
-                
-                if errores:
-                    for error in errores:
-                        st.error(error)
-                else:
-                    # Preparar datos
-                    id_unico = str(uuid.uuid4())[:8].upper()
-                    fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    datos_inscripcion = {
-                        "ID": id_unico,
-                        "Fecha": fecha_actual,
-                        "Nombre": nombre,
-                        "Edad": edad,
-                        "Email": email,
-                        "Telefono": telefono,
-                        "Dojo": dojo,
-                        "Categoria": categoria,
-                        "Estado": "Pendiente"
-                    }
-                    
-                    # Guardar en sheets (tiempo real)
-                    with st.spinner("Guardando inscripción..."):
-                        if guardar_inscripcion(datos_inscripcion):
-                            st.balloons()
-                            st.markdown(f'''
-                            <div class="success-box">
-                                <h3>✅ ¡INSCRIPCIÓN REGISTRADA!</h3>
-                                <p>Tu número de inscripción es: <strong>{id_unico}</strong></p>
-                                <p>Te contactaremos para confirmar el pago.</p>
-                            </div>
-                            ''', unsafe_allow_html=True)
-                            
-                            # Mostrar resumen
-                            with st.expander("📋 Ver resumen de tu inscripción"):
-                                st.json(datos_inscripcion)
-                            
-                            # Botón para nueva inscripción
-                            if st.button("📝 NUEVA INSCRIPCIÓN"):
-                                st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Procesar el envío del formulario (FUERA del with st.form)
+        if submit:
+            # Validaciones
+            errores = []
+            if not nombre:
+                errores.append("Nombre es obligatorio")
+            if not email or not validar_email(email):
+                errores.append("Email inválido")
+            if not telefono or not validar_telefono(telefono):
+                errores.append("Teléfono inválido (formato: 912345678)")
+            if not dojo:
+                errores.append("Dojo es obligatorio")
+            if not acepta:
+                errores.append("Debes aceptar los términos")
+            
+            if errores:
+                for error in errores:
+                    st.error(error)
+            else:
+                # Preparar datos
+                id_unico = str(uuid.uuid4())[:8].upper()
+                fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                datos_inscripcion = {
+                    "ID": id_unico,
+                    "Fecha": fecha_actual,
+                    "Nombre": nombre,
+                    "Edad": edad,
+                    "Email": email,
+                    "Telefono": telefono,
+                    "Dojo": dojo,
+                    "Categoria": categoria,
+                    "Estado": "Pendiente"
+                }
+                
+                # Guardar en sheets (tiempo real)
+                with st.spinner("Guardando inscripción..."):
+                    if guardar_inscripcion(datos_inscripcion):
+                        st.balloons()
+                        st.markdown(f'''
+                        <div class="success-box">
+                            <h3>✅ ¡INSCRIPCIÓN REGISTRADA!</h3>
+                            <p>Tu número de inscripción es: <strong>{id_unico}</strong></p>
+                            <p>Te contactaremos para confirmar el pago.</p>
+                        </div>
+                        ''', unsafe_allow_html=True)
+                        
+                        # Mostrar resumen
+                        with st.expander("📋 Ver resumen de tu inscripción"):
+                            st.json(datos_inscripcion)
     
-    # --- VER INSCRITOS (opcional) ---
+    # --- VER INSCRITOS (opcional) - FUERA del flujo del formulario ---
     with st.expander("👥 Ver inscritos actuales"):
         try:
             conn = get_connection()
@@ -201,8 +199,8 @@ def main():
                 st.caption(f"Total: {len(df)} inscripciones")
             else:
                 st.info("No hay inscritos aún")
-        except:
-            st.warning("No se pudo cargar la lista")
+        except Exception as e:
+            st.warning(f"No se pudo cargar la lista: {e}")
 
 if __name__ == "__main__":
     main()
