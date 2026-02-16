@@ -328,14 +328,14 @@ def generar_id_unico():
     """Genera ID único para la inscripción"""
     return str(uuid.uuid4()).replace('-', '')[:12].upper()
 
-# --- 7. NUEVA FUNCIÓN: MURAL DE INSCRITOS ---
+# --- 7. MURAL DE INSCRITOS ---
 def render_mural():
     """Muestra un mural con todos los inscritos"""
     
     st.markdown('<h1 class="title">🥋 MURAL DE COMPETIDORES</h1>', unsafe_allow_html=True)
     
     # Botón para volver
-    if st.button("← VOLVER AL INICIO", use_container_width=True):
+    if st.button("← VOLVER AL INICIO", width='stretch'):
         st.session_state.pagina = 'principal'
         st.rerun()
     
@@ -429,7 +429,7 @@ def render_mural():
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Opción de descarga
-    if st.button("📥 DESCARGAR LISTA COMPLETA (CSV)", use_container_width=True):
+    if st.button("📥 DESCARGAR LISTA COMPLETA (CSV)", width='stretch'):
         csv = df_filtrado.to_csv(index=False).encode('utf-8')
         st.download_button(
             "📥 Confirmar Descarga",
@@ -447,7 +447,7 @@ def render_formulario():
     # Logo y banner
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.image("https://inertiax.store/cdn/shop/files/wmremove-transformed-removebg-preview.png", use_container_width=True)
+        st.image("https://inertiax.store/cdn/shop/files/wmremove-transformed-removebg-preview.png", width='stretch')
     
     # Información del torneo
     st.markdown("""
@@ -512,9 +512,7 @@ def render_paso1():
         acepta = st.checkbox("Acepto los términos y condiciones del torneo *")
         
         # Botón submit
-        submit = st.form_submit_button("CONTINUAR AL PAGO", 
-                                       use_container_width=True,
-                                       type="primary")
+        submit = st.form_submit_button("CONTINUAR AL PAGO", width='stretch', type="primary")
         
         if submit:
             # Validaciones
@@ -557,13 +555,6 @@ def render_paso1():
         <p>Aceptamos tarjetas de crédito, débito y transferencia</p>
     </div>
     """, unsafe_allow_html=True)
-
-
-
-
-
-
-
 
 def render_paso2():
     """Paso 2: Procesar pago"""
@@ -642,12 +633,12 @@ def render_paso2():
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("← VOLVER", use_container_width=True):
+        if st.button("← VOLVER", width='stretch'):
             st.session_state.paso = 'formulario'
             st.rerun()
     
     with col2:
-        if st.button("PAGAR AHORA 💳", type="primary", use_container_width=True):
+        if st.button("PAGAR AHORA 💳", type="primary", width='stretch'):
             with st.spinner("Preparando pago..."):
                 # Crear preferencia en MercadoPago
                 preferencia_id = f"WKB-{datos['id_inscripcion']}-{int(time.time())}"
@@ -682,9 +673,9 @@ def render_paso2():
                     
                     st.info("⚠️ Después de pagar, espera la confirmación automática")
                     
-                    # Botón para simular pago (desarrollo) - AHORA COMPLETA LA INSCRIPCIÓN DIRECTAMENTE
-                    if st.button("💰 SIMULAR PAGO EXITOSO (Modo Prueba)", use_container_width=True):
-                        # Guardar directamente como confirmado
+                    # Botón para simular pago (desarrollo) - COMPLETA LA INSCRIPCIÓN DIRECTAMENTE
+                    if st.button("💰 SIMULAR PAGO EXITOSO (Modo Prueba)", width='stretch'):
+                        st.session_state.modo_prueba = True
                         st.session_state.paso = 'confirmacion'
                         st.rerun()
                 else:
@@ -754,91 +745,14 @@ def render_paso3():
             # Botones para navegación
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("📝 NUEVA INSCRIPCIÓN", use_container_width=True):
+                if st.button("📝 NUEVA INSCRIPCIÓN", width='stretch'):
                     # Limpiar estado
                     for key in ['paso', 'datos_competidor', 'preferencia_id']:
                         if key in st.session_state:
                             del st.session_state[key]
                     st.rerun()
             with col2:
-                if st.button("👥 VER MURAL DE INSCRITOS", use_container_width=True):
-                    st.session_state.pagina = 'mural'
-                    st.rerun()
-        else:
-            st.error("Error guardando la inscripción. Contacta al organizador.")
-            st.session_state.paso = 'error'
-            st.rerun()
-
-
-
-
-def render_paso3():
-    """Paso 3: Confirmación exitosa"""
-    
-    datos = st.session_state.datos_competidor
-    
-    # Guardar en sheets
-    with st.spinner("Confirmando inscripción..."):
-        # Datos para guardar
-        registro = {
-            "ID_Inscripcion": datos["id_inscripcion"],
-            "Fecha_Registro": datos["fecha_registro"],
-            "Nombre_Completo": datos["nombre"],
-            "Edad": datos["edad"],
-            "Email": datos["email"],
-            "Telefono": datos["telefono"],
-            "Dojo": datos["dojo"],
-            "Categoria": datos["categoria"],
-            "Estado_Pago": "Confirmado",
-            "Monto_Pagado": PRECIO_INSCRIPCION,
-            "Metodo_Pago": "MercadoPago",
-            "Preferencia_ID": st.session_state.get("preferencia_id", ""),
-            "Fecha_Pago": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        # Guardar en sheets
-        if guardar_inscripcion(registro):
-            # Guardar también en la hoja de pagos
-            pago = {
-                "ID_Inscripcion": datos["id_inscripcion"],
-                "Nombre": datos["nombre"],
-                "Monto": PRECIO_INSCRIPCION,
-                "Fecha": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Estado": "aprobado",
-                "Metodo": "MercadoPago"
-            }
-            guardar_pago(pago)
-            
-            # Mostrar confirmación
-            st.balloons()
-            
-            st.markdown(f"""
-            <div class="success-message">
-                <h2>✅ ¡INSCRIPCIÓN CONFIRMADA!</h2>
-                <p style="font-size: 18px; margin: 20px 0;">
-                    Gracias por inscribirte al Torneo WKB 2025
-                </p>
-                <div style="background: #0e1117; padding: 20px; border-radius: 10px; margin: 20px 0;">
-                    <p><strong>ID de Inscripción:</strong> {datos['id_inscripcion']}</p>
-                    <p><strong>Competidor:</strong> {datos['nombre']}</p>
-                    <p><strong>Categoría:</strong> {datos['categoria']}</p>
-                    <p><strong>Dojo:</strong> {datos['dojo']}</p>
-                </div>
-                <p>Te enviaremos un email con más información a <strong>{datos['email']}</strong></p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Botones para navegación
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("📝 NUEVA INSCRIPCIÓN", use_container_width=True):
-                    # Limpiar estado
-                    for key in ['paso', 'datos_competidor', 'preferencia_id']:
-                        if key in st.session_state:
-                            del st.session_state[key]
-                    st.rerun()
-            with col2:
-                if st.button("👥 VER MURAL DE INSCRITOS", use_container_width=True):
+                if st.button("👥 VER MURAL DE INSCRITOS", width='stretch'):
                     st.session_state.pagina = 'mural'
                     st.rerun()
         else:
@@ -857,7 +771,7 @@ def render_error():
     </div>
     """, unsafe_allow_html=True)
     
-    if st.button("🔄 INTENTAR NUEVAMENTE", use_container_width=True):
+    if st.button("🔄 INTENTAR NUEVAMENTE", width='stretch'):
         for key in ['paso', 'datos_competidor', 'preferencia_id']:
             if key in st.session_state:
                 del st.session_state[key]
@@ -912,7 +826,7 @@ def render_principal():
     # Logo
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", use_container_width=True)
+        st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", width='stretch')
     
     # Mensaje de bienvenida
     st.markdown("""
@@ -930,18 +844,18 @@ def render_principal():
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("📝 INSCRIBIRSE", use_container_width=True):
+        if st.button("📝 INSCRIBIRSE", width='stretch'):
             st.session_state.pagina = 'formulario'
             st.rerun()
     
     with col2:
-        if st.button("👥 VER MURAL DE INSCRITOS", use_container_width=True):
+        if st.button("👥 VER MURAL DE INSCRITOS", width='stretch'):
             st.session_state.pagina = 'mural'
             st.rerun()
     
     # Admin link pequeño
     st.markdown("---")
-    if st.button("⚙️ Admin", use_container_width=True):
+    if st.button("⚙️ Admin", width='stretch'):
         st.session_state.pagina = 'admin'
         st.rerun()
     
