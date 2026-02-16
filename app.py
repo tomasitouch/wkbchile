@@ -6,18 +6,20 @@ import plotly.express as px
 import plotly.graph_objects as go
 import uuid
 import time
-from datetime import datetime, timedelta
+import random
 import hashlib
 import re
-from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Tuple
 import logging
+import numpy as np
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="WKB ALL AMERICAN 2026 | Official Registration",
+    page_title="WKB WORLD CUP 2026 | Official Registration & Brackets",
     page_icon="🥋",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # --- CONSTANTES & CONFIGURACIÓN ---
@@ -26,9 +28,10 @@ class Config:
     CODIGO_VIP = "WKB2026"
     LOGO_URL = "https://www.worldkyokushinbudokai.com/assets/custom/img/logo.png"
     FECHA_TORNEO = datetime(2026, 4, 24, 9, 0, 0)
-    PRECIO = 250
+    PRECIO = 15000
     MAX_CAPACIDAD = 500
     WORKSHEET_NAME = "Inscripciones"
+    BRACKETS_WORKSHEET = "Brackets"  # Nueva hoja para brackets
     
     CATEGORIAS = [
         "KUMITE -65kg (18+)", "KUMITE -70kg (18+)", "KUMITE -75kg (18+)",
@@ -75,12 +78,208 @@ class Utils:
         minutos, segundos = divmod(resto, 60)
         return {"dias": dias, "horas": horas, "minutos": minutos, "segundos": segundos}
 
+# --- BRACKET MANAGER ---
+class BracketManager:
+    """Maneja la creación y gestión de brackets de combate"""
+    
+    def __init__(self, conn):
+        self.conn = conn
+    
+    def get_brackets(self) -> pd.DataFrame:
+        """Obtiene los brackets existentes"""
+        try:
+            return self.conn.read(worksheet=Config.BRACKETS_WORKSHEET, ttl=0)
+        except:
+            return pd.DataFrame(columns=[
+                "Bracket_ID", "Categoria", "Ronda", "Pareja_ID",
+                "Competidor1_ID", "Competidor1_Nombre", "Competidor1_Dojo",
+                "Competidor2_ID", "Competidor2_Nombre", "Competidor2_Dojo",
+                "Ganador_ID", "Estado", "Fecha_Asignacion", "Tatami"
+            ])
+    
+    def check_activation_flag(self, df_inscripciones: pd.DataFrame) -> bool:
+        """Verifica si la columna de emparejar está activada"""
+        if 'Emparejar' in df_inscripciones.columns:
+            # Buscar cualquier celda con "SI" o "ACTIVAR"
+            mask = df_inscripciones['Emparejar'].astype(str).str.upper().isin(['SI', 'ACTIVAR', 'TRUE', '1', 'X'])
+            return mask.any()
+        return False
+    
+    def clear_activation_flags(self, df_inscripciones: pd.DataFrame) -> pd.DataFrame:
+        """Limpia las banderas de activación después de procesar"""
+        if 'Emparejar' in df_inscripciones.columns:
+            df_inscripciones['Emparejar'] = ''
+        return df_inscripciones
+    
+    def create_brackets(self, df_inscripciones: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, any]]:
+        """
+        Crea brackets automáticamente por categoría
+        Retorna: (DataFrame de brackets, estadísticas)
+        """
+        
+        # Filtrar solo confirmados
+        df_conf = df_inscripciones[df_inscripciones['Estado'] == 'CONFIRMADO'].copy()
+        
+        if df_conf.empty:
+            return pd.DataFrame(), {"error": "No hay competidores confirmados"}
+        
+        brackets_list = []
+        stats = {}
+        
+        # Procesar cada categoría
+        for categoria in Config.CATEGORIAS:
+            df_cat = df_conf[df_conf['Categoria'] == categoria]
+            
+            if len(df_cat) < 2:
+                stats[categoria] = {
+                    "competidores": len(df_cat),
+                    "parejas": 0,
+                    "estado": "Insuficientes competidores" if len(df_cat) > 0 else "Sin competidores"
+                }
+                continue
+            
+            # Mezclar aleatoriamente para brackets justos
+            competidores = df_cat.to_dict('records')
+            random.shuffle(competidores)
+            
+            # Calcular número de rondas necesario
+            num_competidores = len(competidores)
+            num_parejas = num_competidores // 2
+            byes = num_competidores % 2
+            
+            # Crear parejas
+            parejas_creadas = 0
+            bracket_id = f"BRACKET_{categoria[:10]}_{datetime.now().strftime('%Y%m%d')}"
+            
+            for i in range(0, len(competidores) - 1, 2):
+                if i + 1 < len(competidores):
+                    c1 = competidores[i]
+                    c2 = competidores[i + 1]
+                    
+                    # Determinar ronda (simplificado - todos empiezan en Ronda 1)
+                    ronda = "Ronda 1"
+                    if num_competidores > 8 and i >= 4:
+                        ronda = "Ronda 2" if num_competidores <= 16 else "Clasificatoria"
+                    
+                    pareja_id = f"P{len(brackets_list)+1:03d}"
+                    
+                    bracket_entry = {
+                        "Bracket_ID": bracket_id,
+                        "Categoria": categoria,
+                        "Ronda": ronda,
+                        "Pareja_ID": pareja_id,
+                        "Competidor1_ID": c1.get('ID', ''),
+                        "Competidor1_Nombre": c1.get('Nombre', ''),
+                        "Competidor1_Dojo": c1.get('Dojo', ''),
+                        "Competidor2_ID": c2.get('ID', ''),
+                        "Competidor2_Nombre": c2.get('Nombre', ''),
+                        "Competidor2_Dojo": c2.get('Dojo', ''),
+                        "Ganador_ID": "",
+                        "Estado": "Pendiente",
+                        "Fecha_Asignacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Tatami": f"Tatami {(len(brackets_list) % 3) + 1}"  # Distribuir en tatamis
+                    }
+                    
+                    brackets_list.append(bracket_entry)
+                    parejas_creadas += 1
+            
+            # Guardar estadísticas de la categoría
+            stats[categoria] = {
+                "competidores": num_competidores,
+                "parejas": parejas_creadas,
+                "byes": byes,
+                "estado": "OK" if parejas_creadas > 0 else "Sin parejas"
+            }
+        
+        # Crear DataFrame final
+        df_brackets = pd.DataFrame(brackets_list)
+        
+        # Si hay un competidor sin pareja (bye), crear entrada especial
+        for categoria in Config.CATEGORIAS:
+            df_cat = df_conf[df_conf['Categoria'] == categoria]
+            if len(df_cat) % 2 == 1:  # Número impar
+                # El último competidor recibe bye
+                ultimo = df_cat.iloc[-1]
+                bye_entry = {
+                    "Bracket_ID": f"BYE_{categoria[:10]}",
+                    "Categoria": categoria,
+                    "Ronda": "Ronda 1",
+                    "Pareja_ID": f"BYE{len(brackets_list)+1:03d}",
+                    "Competidor1_ID": ultimo.get('ID', ''),
+                    "Competidor1_Nombre": ultimo.get('Nombre', ''),
+                    "Competidor1_Dojo": ultimo.get('Dojo', ''),
+                    "Competidor2_ID": "BYE",
+                    "Competidor2_Nombre": "BYE (Descansa)",
+                    "Competidor2_Dojo": "-",
+                    "Ganador_ID": ultimo.get('ID', ''),
+                    "Estado": "Bye - Automático",
+                    "Fecha_Asignacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Tatami": "Descansa"
+                }
+                df_brackets = pd.concat([df_brackets, pd.DataFrame([bye_entry])], ignore_index=True)
+        
+        return df_brackets, stats
+    
+    def save_brackets(self, df_brackets: pd.DataFrame) -> bool:
+        """Guarda los brackets en Google Sheets"""
+        try:
+            # Obtener brackets existentes
+            df_existente = self.get_brackets()
+            
+            # Combinar con nuevos brackets (evitar duplicados)
+            if not df_existente.empty:
+                # Verificar si ya existen brackets para esta fecha
+                hoy = datetime.now().strftime("%Y-%m-%d")
+                df_hoy = df_existente[df_existente['Fecha_Asignacion'].str.contains(hoy)]
+                
+                if not df_hoy.empty:
+                    # Si ya hay brackets hoy, preguntar si reemplazar
+                    return "EXISTEN"
+            
+            # Guardar nuevos brackets
+            self.conn.update(worksheet=Config.BRACKETS_WORKSHEET, data=df_brackets)
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error guardando brackets: {str(e)}")
+            return False
+    
+    def get_bracket_tree(self, categoria: str) -> Dict:
+        """Construye el árbol de brackets para una categoría"""
+        df = self.get_brackets()
+        
+        if df.empty:
+            return {}
+        
+        df_cat = df[df['Categoria'] == categoria]
+        
+        # Organizar por rondas
+        brackets = {}
+        for _, row in df_cat.iterrows():
+            ronda = row['Ronda']
+            if ronda not in brackets:
+                brackets[ronda] = []
+            
+            brackets[ronda].append({
+                'pareja_id': row['Pareja_ID'],
+                'competidor1': row['Competidor1_Nombre'],
+                'competidor1_dojo': row['Competidor1_Dojo'],
+                'competidor2': row['Competidor2_Nombre'],
+                'competidor2_dojo': row['Competidor2_Dojo'],
+                'ganador': row['Ganador_ID'],
+                'estado': row['Estado'],
+                'tatami': row['Tatami']
+            })
+        
+        return brackets
+
 # --- DATABASE MANAGER ---
 class DatabaseManager:
     """Maneja todas las operaciones con Google Sheets"""
     
     def __init__(self):
         self.conn = st.connection("gsheets", type=GSheetsConnection)
+        self.bracket_manager = BracketManager(self.conn)
     
     def get_all(self) -> pd.DataFrame:
         """Obtiene todas las inscripciones"""
@@ -89,92 +288,55 @@ class DatabaseManager:
             if df.empty:
                 return pd.DataFrame(columns=[
                     "ID", "Fecha", "Nombre", "Email", "Dojo", "Categoria", 
-                    "Telefono", "Edad", "Pais", "Estado", "Metodo", "Notas"
+                    "Telefono", "Edad", "Pais", "Estado", "Metodo", "Notas", "Emparejar"
                 ])
             return df
         except Exception as e:
             st.error(f"Error de conexión: {str(e)}")
             return pd.DataFrame()
     
-    def get_stats(self) -> Dict[str, Any]:
-        """Obtiene estadísticas rápidas"""
-        df = self.get_all()
-        if df.empty:
-            return {"total": 0, "confirmados": 0, "dojos": 0, "categorias": 0}
-        
-        df_conf = df[df['Estado'] == 'CONFIRMADO'] if 'Estado' in df.columns else df
-        
-        return {
-            "total": len(df),
-            "confirmados": len(df_conf),
-            "dojos": df_conf['Dojo'].nunique() if not df_conf.empty else 0,
-            "categorias": df_conf['Categoria'].nunique() if not df_conf.empty else 0,
-            "disponibles": Config.MAX_CAPACIDAD - len(df_conf)
-        }
-    
-    def check_duplicate(self, email: str, nombre: str) -> bool:
-        """Verifica si ya existe un registro similar"""
-        df = self.get_all()
-        if df.empty:
-            return False
-        
-        # Verificar por email o nombre + fecha reciente
-        email_exists = email in df['Email'].values if 'Email' in df.columns else False
-        
-        if email_exists:
-            return True
-        
-        # Verificar inscripciones recientes con mismo nombre (última hora)
-        if 'Nombre' in df.columns and 'Fecha' in df.columns:
-            nombre_match = df[df['Nombre'].str.lower() == nombre.lower()]
-            if not nombre_match.empty:
-                # Verificar si alguna es de las últimas 24 horas
-                try:
-                    fechas = pd.to_datetime(nombre_match['Fecha'])
-                    hace_24h = datetime.now() - timedelta(hours=24)
-                    if any(fechas > hace_24h):
-                        return True
-                except:
-                    pass
-        
-        return False
-    
-    def save_registration(self, datos: Dict[str, Any], metodo: str) -> bool:
-        """Guarda una nueva inscripción"""
+    def update_sheet(self, df: pd.DataFrame) -> bool:
+        """Actualiza la hoja de inscripciones"""
         try:
-            df_existente = self.get_all()
-            
-            # Verificar duplicados
-            if not df_existente.empty and datos['id'] in df_existente['ID'].values:
-                return True
-            
-            nueva_fila = pd.DataFrame([{
-                "ID": datos['id'],
-                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Nombre": datos['nombre'].upper(),
-                "Email": datos['email'].lower(),
-                "Dojo": datos['dojo'].upper(),
-                "Categoria": datos['categoria'],
-                "Telefono": datos['telefono'],
-                "Edad": datos['edad'],
-                "Pais": datos.get('pais', 'Chile'),
-                "Estado": "CONFIRMADO",
-                "Metodo": metodo,
-                "Notas": datos.get('notas', '')
-            }])
-            
-            df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
-            self.conn.update(worksheet=Config.WORKSHEET_NAME, data=df_final)
-            
-            # Logging
-            logging.info(f"Registro guardado: {datos['id']} - {metodo}")
-            
+            self.conn.update(worksheet=Config.WORKSHEET_NAME, data=df)
             return True
-            
         except Exception as e:
-            logging.error(f"Error guardando registro: {str(e)}")
-            st.error(f"Error en base de datos: {str(e)}")
+            logging.error(f"Error actualizando sheet: {str(e)}")
             return False
+    
+    def check_and_generate_brackets(self) -> Tuple[bool, str, pd.DataFrame, Dict]:
+        """
+        Verifica si hay bandera de emparejar y genera brackets
+        Retorna: (procesado, mensaje, df_brackets, stats)
+        """
+        df = self.get_all()
+        
+        if df.empty:
+            return False, "No hay datos en la hoja de inscripciones", pd.DataFrame(), {}
+        
+        # Verificar bandera de emparejar
+        if not self.bracket_manager.check_activation_flag(df):
+            return False, "No hay solicitud de emparejamiento activa", pd.DataFrame(), {}
+        
+        # Generar brackets
+        df_brackets, stats = self.bracket_manager.create_brackets(df)
+        
+        if df_brackets.empty:
+            return False, "No se pudieron generar brackets", pd.DataFrame(), stats
+        
+        # Guardar brackets
+        save_result = self.bracket_manager.save_brackets(df_brackets)
+        
+        if save_result == "EXISTEN":
+            return False, "Ya existen brackets generados hoy. Limpia la bandera para regenerar.", df_brackets, stats
+        elif save_result:
+            # Limpiar banderas de activación
+            df_limpio = self.bracket_manager.clear_activation_flags(df)
+            self.update_sheet(df_limpio)
+            
+            return True, f"Brackets generados exitosamente para {len(df_brackets)} parejas", df_brackets, stats
+        else:
+            return False, "Error al guardar brackets", df_brackets, stats
 
 # --- PAYMENT MANAGER ---
 class PaymentManager:
@@ -284,7 +446,7 @@ class UIComponents:
         }
         
         .logo-container img {
-            width: min(550px, 89%);
+            width: min(300px, 80%);
             filter: drop-shadow(0 0 20px rgba(255, 43, 43, 0.2));
             transition: filter 0.3s;
         }
@@ -326,6 +488,72 @@ class UIComponents:
             letter-spacing: 2px;
         }
         
+        /* Bracket Styles */
+        .bracket-container {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        
+        .bracket-round {
+            flex: 1;
+            min-width: 250px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .bracket-match {
+            background: rgba(255,43,43,0.1);
+            border: 1px solid #ff2b2b;
+            border-radius: 8px;
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            position: relative;
+        }
+        
+        .bracket-match::after {
+            content: '';
+            position: absolute;
+            right: -1rem;
+            top: 50%;
+            width: 1rem;
+            height: 2px;
+            background: #ff2b2b;
+        }
+        
+        .bracket-match:last-child::after {
+            display: none;
+        }
+        
+        .competitor {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            border-bottom: 1px solid #333;
+        }
+        
+        .competitor:last-child {
+            border-bottom: none;
+        }
+        
+        .competitor.winner {
+            color: #ff2b2b;
+            font-weight: bold;
+        }
+        
+        .tatami-badge {
+            display: inline-block;
+            background: #ff2b2b;
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            margin-top: 0.5rem;
+        }
+        
         /* Buttons */
         .stButton > button {
             background: linear-gradient(90deg, #8b0000 0%, #ff2b2b 100%);
@@ -353,24 +581,11 @@ class UIComponents:
             color: white !important;
         }
         
-        .stTextInput > label, .stNumberInput > label, .stSelectbox > label {
-            color: #aaa !important;
-            font-family: 'Rajdhani', sans-serif !important;
-            font-size: 0.9rem !important;
-            text-transform: uppercase !important;
-            letter-spacing: 1px !important;
-        }
-        
         /* Metrics */
         [data-testid="stMetricValue"] {
             font-family: 'Orbitron', monospace !important;
             font-size: 2rem !important;
             color: #ff2b2b !important;
-        }
-        
-        [data-testid="stMetricLabel"] {
-            font-family: 'Rajdhani', sans-serif !important;
-            color: #aaa !important;
         }
         
         /* Tabs */
@@ -394,6 +609,10 @@ class UIComponents:
             
             .glass-card {
                 padding: 1rem;
+            }
+            
+            .bracket-container {
+                flex-direction: column;
             }
         }
         </style>
@@ -426,108 +645,85 @@ class UIComponents:
         """, unsafe_allow_html=True)
     
     @staticmethod
-    def render_charts(df: pd.DataFrame):
-        """Renderiza gráficos interactivos"""
-        if df.empty:
-            st.info("📊 No hay datos suficientes para mostrar estadísticas")
+    def render_brackets(df_brackets: pd.DataFrame, stats: Dict = None):
+        """Renderiza los brackets de combate"""
+        
+        if df_brackets.empty:
+            st.info("📊 No hay brackets generados todavía")
             return
         
-        df_conf = df[df['Estado'] == 'CONFIRMADO'] if 'Estado' in df.columns else df
+        # Estadísticas generales
+        if stats:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                total_parejas = len(df_brackets[df_brackets['Competidor2_ID'] != 'BYE'])
+                st.metric("Total Parejas", total_parejas)
+            with col2:
+                categorias_con_parejas = df_brackets['Categoria'].nunique()
+                st.metric("Categorías Activas", categorias_con_parejas)
+            with col3:
+                total_competidores = len(df_brackets['Competidor1_ID'].unique()) + len(df_brackets[df_brackets['Competidor2_ID'] != 'BYE']['Competidor2_ID'].unique())
+                st.metric("Competidores", total_competidores)
         
-        col1, col2 = st.columns(2)
+        # Selector de categoría
+        categorias_disponibles = df_brackets['Categoria'].unique()
+        categoria_seleccionada = st.selectbox(
+            "Seleccionar Categoría",
+            categorias_disponibles,
+            key="bracket_cat_selector"
+        )
         
-        with col1:
-            # Gráfico de distribución por categoría
-            if 'Categoria' in df_conf.columns:
-                counts = df_conf['Categoria'].value_counts().head(8)
-                fig = go.Figure(data=[
-                    go.Bar(
-                        x=counts.values,
-                        y=counts.index,
-                        orientation='h',
-                        marker=dict(
-                            color=counts.values,
-                            colorscale='Reds',
-                            showscale=True,
-                            colorbar=dict(title="Inscritos")
-                        ),
-                        text=counts.values,
-                        textposition='outside',
-                        hovertemplate='<b>%{y}</b><br>Inscritos: %{x}<extra></extra>'
-                    )
-                ])
-                
-                fig.update_layout(
-                    title="Distribución por Categoría",
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='white', family='Rajdhani'),
-                    xaxis=dict(showgrid=False, color='#888'),
-                    yaxis=dict(showgrid=False, color='#fff'),
-                    height=400,
-                    margin=dict(l=0, r=0, t=40, b=0)
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Gráfico de evolución temporal
-            if 'Fecha' in df_conf.columns:
-                try:
-                    df_fechas = df_conf.copy()
-                    df_fechas['Fecha'] = pd.to_datetime(df_fechas['Fecha'])
-                    df_fechas = df_fechas.set_index('Fecha').resample('D').size().reset_index()
-                    df_fechas.columns = ['Fecha', 'Inscritos']
-                    df_fechas['Acumulado'] = df_fechas['Inscritos'].cumsum()
+        if categoria_seleccionada:
+            df_cat = df_brackets[df_brackets['Categoria'] == categoria_seleccionada]
+            
+            # Distribución por tatami
+            st.markdown(f"### 🥋 Categoría: {categoria_seleccionada}")
+            
+            tatamis = df_cat['Tatami'].unique()
+            tatami_cols = st.columns(len(tatamis))
+            
+            for idx, tatami in enumerate(sorted(tatamis)):
+                with tatami_cols[idx]:
+                    df_tatami = df_cat[df_cat['Tatami'] == tatami]
+                    st.markdown(f"**{tatami}**")
                     
-                    fig = go.Figure()
-                    
-                    fig.add_trace(go.Scatter(
-                        x=df_fechas['Fecha'],
-                        y=df_fechas['Acumulado'],
-                        mode='lines+markers',
-                        name='Acumulado',
-                        line=dict(color='#ff2b2b', width=3),
-                        fill='tozeroy',
-                        fillcolor='rgba(255,43,43,0.1)'
-                    ))
-                    
-                    fig.update_layout(
-                        title="Evolución de Inscripciones",
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='white', family='Rajdhani'),
-                        xaxis=dict(showgrid=False, color='#888'),
-                        yaxis=dict(showgrid=False, color='#fff'),
-                        height=400,
-                        margin=dict(l=0, r=0, t=40, b=0)
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                except Exception as e:
-                    st.warning("No hay suficientes datos históricos")
-    
-    @staticmethod
-    def render_payment_summary(data: Dict[str, Any]):
-        """Renderiza resumen de pago"""
-        st.markdown(f"""
-        <div style="background: linear-gradient(145deg, #1e2028, #14161e); 
-                    border-radius: 12px; 
-                    padding: 1.5rem; 
-                    margin: 1rem 0;
-                    border: 1px solid #333;">
-            <h4 style="margin:0 0 0.5rem 0; color:#ff2b2b;">{data['nombre']}</h4>
-            <p style="margin:0; color:#888;">{data['categoria']}</p>
-            <p style="margin:0; color:#888;">{data['dojo']}</p>
-            <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #333;">
-                <span style="color:#aaa;">Total a pagar:</span>
-                <span style="float:right; font-family:'Orbitron'; font-size:1.5rem; color:#ff2b2b;">
-                    {Utils.format_currency(Config.PRECIO)}
-                </span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+                    for _, match in df_tatami.iterrows():
+                        winner_class = "winner" if match['Ganador_ID'] else ""
+                        
+                        # Determinar estilo según resultado
+                        if match['Competidor2_ID'] == 'BYE':
+                            st.markdown(f"""
+                            <div class="bracket-match" style="background: rgba(255,215,0,0.1);">
+                                <div class="competitor {winner_class if match['Ganador_ID'] == match['Competidor1_ID'] else ''}">
+                                    <span>⭐ {match['Competidor1_Nombre']}</span>
+                                    <small>{match['Competidor1_Dojo']}</small>
+                                </div>
+                                <div style="color: #FFD700; text-align: center; font-size: 0.8rem;">
+                                    BYE - Avanza directo
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                            <div class="bracket-match">
+                                <div class="competitor {winner_class if match['Ganador_ID'] == match['Competidor1_ID'] else ''}">
+                                    <span>⚔️ {match['Competidor1_Nombre']}</span>
+                                    <small>{match['Competidor1_Dojo']}</small>
+                                </div>
+                                <div class="competitor {winner_class if match['Ganador_ID'] == match['Competidor2_ID'] else ''}">
+                                    <span>⚔️ {match['Competidor2_Nombre']}</span>
+                                    <small>{match['Competidor2_Dojo']}</small>
+                                </div>
+                                <div style="text-align: center; margin-top: 0.5rem;">
+                                    <span class="tatami-badge">{match['Estado']}</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+            
+            # Tabla de detalles
+            with st.expander("Ver detalles de la categoría"):
+                df_display = df_cat[['Pareja_ID', 'Ronda', 'Competidor1_Nombre', 'Competidor2_Nombre', 'Tatami', 'Estado']]
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
 
 # --- MAIN APP ---
 class WKBApp:
@@ -543,6 +739,8 @@ class WKBApp:
             st.session_state.step = 1
         if 'tmp_data' not in st.session_state:
             st.session_state.tmp_data = {}
+        if 'brackets_generated' not in st.session_state:
+            st.session_state.brackets_generated = False
     
     def handle_payment_callback(self):
         """Maneja callbacks de pago"""
@@ -580,7 +778,7 @@ class WKBApp:
                            background: linear-gradient(45deg, #fff, #ff2b2b);
                            -webkit-background-clip: text;
                            -webkit-text-fill-color: transparent;">
-                    ALL AMERICAN 2026
+                    WORLD CUP 2026
                 </h1>
                 <p style="color: #666; letter-spacing: 3px;">SANTIAGO · CHILE</p>
             </div>
@@ -592,8 +790,13 @@ class WKBApp:
         """Renderiza dashboard principal"""
         st.markdown("## 📊 LIVE DASHBOARD")
         
-        stats = self.db.get_stats()
         df = self.db.get_all()
+        
+        if df.empty:
+            st.info("No hay datos disponibles")
+            return
+        
+        df_conf = df[df['Estado'] == 'CONFIRMADO'] if 'Estado' in df.columns else df
         
         # KPIs
         col1, col2, col3, col4 = st.columns(4)
@@ -601,84 +804,54 @@ class WKBApp:
         with col1:
             st.metric(
                 "Total Inscritos",
-                stats['confirmados'],
+                len(df_conf),
                 delta=None
             )
         
         with col2:
             st.metric(
                 "Cupos Disponibles",
-                stats['disponibles'],
-                delta=f"{int((stats['confirmados']/Config.MAX_CAPACIDAD)*100)}%",
+                Config.MAX_CAPACIDAD - len(df_conf),
+                delta=f"{int((len(df_conf)/Config.MAX_CAPACIDAD)*100)}%",
                 delta_color="inverse"
             )
         
         with col3:
             st.metric(
                 "Dojos Representados",
-                stats['dojos'],
+                df_conf['Dojo'].nunique() if not df_conf.empty else 0,
                 delta=None
             )
         
         with col4:
             st.metric(
                 "Categorías Activas",
-                stats['categorias'],
+                df_conf['Categoria'].nunique() if not df_conf.empty else 0,
                 delta=None
             )
         
         # Gráficos
         with st.container():
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            self.ui.render_charts(df)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Información de premios
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown("### 🏆 PREMIOS")
+            st.markdown("### 📈 Distribución por Categoría")
             
-            premios = [
-                ("🥇 1er Lugar", "Medalla de Oro + Copa + Trofeo"),
-                ("🥈 2do Lugar", "Medalla de Plata + Copa"),
-                ("🥉 3er Lugar", "Medalla de Bronce")
-            ]
-            
-            for premio, desc in premios:
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; 
-                            padding:0.75rem; border-bottom:1px solid #333;">
-                    <span style="color:#ff2b2b; font-weight:bold;">{premio}</span>
-                    <span style="color:#aaa;">{desc}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown("### ⏰ HORARIOS")
-            
-            horarios = [
-                ("08:00 - 09:00", "Acreditación"),
-                ("09:00 - 10:00", "Ceremonia de Apertura"),
-                ("10:00 - 13:00", "Eliminatorias Kumite"),
-                ("13:00 - 14:00", "Almuerzo"),
-                ("14:00 - 17:00", "Finales Kumite"),
-                ("17:00 - 18:00", "Competencia Kata"),
-                ("18:00 - 19:00", "Premiación")
-            ]
-            
-            for hora, evento in horarios:
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; 
-                            padding:0.5rem; border-bottom:1px solid #333;">
-                    <span style="color:#ff2b2b;">{hora}</span>
-                    <span style="color:#aaa;">{evento}</span>
-                </div>
-                """, unsafe_allow_html=True)
+            if not df_conf.empty and 'Categoria' in df_conf.columns:
+                counts = df_conf['Categoria'].value_counts()
+                fig = px.bar(
+                    x=counts.values,
+                    y=counts.index,
+                    orientation='h',
+                    color=counts.values,
+                    color_continuous_scale=['#440000', '#ff2b2b'],
+                    labels={'x': 'Inscritos', 'y': ''}
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='white'),
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
             
             st.markdown('</div>', unsafe_allow_html=True)
     
@@ -700,45 +873,18 @@ class WKBApp:
             col1, col2 = st.columns(2)
             
             with col1:
-                nombre = st.text_input(
-                    "Nombre Completo *",
-                    help="Ingresa tu nombre tal como aparece en tu documento"
-                )
-                email = st.text_input(
-                    "Email *",
-                    help="Correo electrónico para confirmación"
-                )
-                telefono = st.text_input(
-                    "Teléfono / WhatsApp *",
-                    help="Incluye código de país (ej: +56 9 1234 5678)"
-                )
+                nombre = st.text_input("Nombre Completo *")
+                email = st.text_input("Email *")
+                telefono = st.text_input("Teléfono / WhatsApp *")
             
             with col2:
-                edad = st.number_input(
-                    "Edad *",
-                    min_value=18,
-                    max_value=99,
-                    value=18
-                )
-                dojo = st.text_input(
-                    "Dojo / Escuela *",
-                    help="Nombre de tu escuela o gimnasio"
-                )
-                pais = st.selectbox(
-                    "País *",
-                    options=Config.PAISES
-                )
+                edad = st.number_input("Edad *", min_value=18, max_value=99, value=18)
+                dojo = st.text_input("Dojo / Escuela *")
+                pais = st.selectbox("País *", options=Config.PAISES)
             
-            categoria = st.selectbox(
-                "Categoría *",
-                options=Config.CATEGORIAS,
-                help="Selecciona la categoría en la que deseas competir"
-            )
+            categoria = st.selectbox("Categoría *", options=Config.CATEGORIAS)
             
-            terminos = st.checkbox(
-                "Acepto los términos y condiciones del torneo *",
-                help="Debes aceptar para continuar"
-            )
+            terminos = st.checkbox("Acepto los términos y condiciones del torneo *")
             
             st.markdown("---")
             submitted = st.form_submit_button(
@@ -756,31 +902,22 @@ class WKBApp:
                 elif len(nombre.split()) < 2:
                     errors.append("❌ Ingresa nombre y apellido")
                 
-                if not email:
-                    errors.append("❌ El email es obligatorio")
-                elif not Utils.validate_email(email):
-                    errors.append("❌ Formato de email inválido")
+                if not email or not Utils.validate_email(email):
+                    errors.append("❌ Email inválido")
                 
-                if not telefono:
-                    errors.append("❌ El teléfono es obligatorio")
-                elif not Utils.validate_phone(telefono):
-                    errors.append("❌ El teléfono debe tener al menos 8 dígitos")
+                if not telefono or not Utils.validate_phone(telefono):
+                    errors.append("❌ Teléfono inválido (mínimo 8 dígitos)")
                 
                 if not dojo:
                     errors.append("❌ El dojo es obligatorio")
                 
                 if not terminos:
-                    errors.append("❌ Debes aceptar los términos y condiciones")
-                
-                # Verificar duplicados
-                if self.db.check_duplicate(email, nombre):
-                    errors.append("❌ Ya existe un registro con estos datos")
+                    errors.append("❌ Debes aceptar los términos")
                 
                 if errors:
                     for error in errors:
                         st.error(error)
                 else:
-                    # Guardar datos temporales
                     st.session_state.tmp_data = {
                         "id": Utils.hash_id(f"{nombre}{email}{datetime.now()}"),
                         "nombre": nombre.strip(),
@@ -803,7 +940,24 @@ class WKBApp:
         st.markdown("### 🔐 CONFIRMAR INSCRIPCIÓN")
         
         # Mostrar resumen
-        self.ui.render_payment_summary(st.session_state.tmp_data)
+        data = st.session_state.tmp_data
+        st.markdown(f"""
+        <div style="background: linear-gradient(145deg, #1e2028, #14161e); 
+                    border-radius: 12px; 
+                    padding: 1.5rem; 
+                    margin: 1rem 0;
+                    border: 1px solid #333;">
+            <h4 style="margin:0 0 0.5rem 0; color:#ff2b2b;">{data['nombre']}</h4>
+            <p style="margin:0; color:#888;">{data['categoria']}</p>
+            <p style="margin:0; color:#888;">{data['dojo']}</p>
+            <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #333;">
+                <span style="color:#aaa;">Total a pagar:</span>
+                <span style="float:right; font-family:'Orbitron'; font-size:1.5rem; color:#ff2b2b;">
+                    {Utils.format_currency(Config.PRECIO)}
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         
@@ -826,17 +980,13 @@ class WKBApp:
                 </a>
                 """, unsafe_allow_html=True)
             else:
-                st.error("Error en sistema de pagos. Intenta más tarde.")
+                st.error("Error en sistema de pagos")
         
         st.markdown("---")
         st.markdown("### 🎟️ CÓDIGO DE INVITACIÓN")
         
         with st.expander("¿Tienes un código VIP?"):
-            vip_code = st.text_input(
-                "Ingresa tu código",
-                type="password",
-                key="vip_code_input"
-            )
+            vip_code = st.text_input("Ingresa tu código", type="password", key="vip_code_input")
             
             if st.button("VALIDAR CÓDIGO", use_container_width=True):
                 if vip_code == Config.CODIGO_VIP:
@@ -844,17 +994,51 @@ class WKBApp:
                         if self.db.save_registration(st.session_state.tmp_data, "VIP"):
                             st.balloons()
                             st.success("✅ ¡Código válido! Inscripción confirmada.")
-                            
-                            # Limpiar sesión
                             st.session_state.tmp_data = {}
                             st.session_state.step = 1
-                            
                             time.sleep(2)
                             st.rerun()
                 else:
                     st.error("❌ Código inválido")
         
         st.markdown('</div>', unsafe_allow_html=True)
+    
+    def render_brackets_tab(self):
+        """Renderiza la pestaña de brackets"""
+        st.markdown("## 🏆 BRACKETS DE COMBATE")
+        
+        # Verificar generación automática
+        procesado, mensaje, df_brackets, stats = self.db.check_and_generate_brackets()
+        
+        if procesado:
+            st.balloons()
+            st.success(f"✅ {mensaje}")
+            st.session_state.brackets_generated = True
+            self.ui.render_brackets(df_brackets, stats)
+        elif mensaje and not procesado:
+            if "No hay solicitud" not in mensaje:
+                st.warning(f"ℹ️ {mensaje}")
+            
+            # Mostrar brackets existentes
+            df_existentes = self.db.bracket_manager.get_brackets()
+            if not df_existentes.empty:
+                self.ui.render_brackets(df_existentes)
+            else:
+                if "No hay solicitud" in mensaje:
+                    st.info("Para generar brackets, agrega una columna 'Emparejar' en el Excel y escribe 'SI' en cualquier celda")
+                    
+                    # Mostrar ejemplo
+                    with st.expander("📋 Ver ejemplo de configuración"):
+                        st.markdown("""
+                        **Para activar el emparejamiento:**
+                        
+                        1. En tu hoja de Google Sheets, agrega una columna llamada **`Emparejar`**
+                        2. En cualquier celda de esa columna, escribe **`SI`** o **`ACTIVAR`**
+                        3. La aplicación detectará automáticamente la solicitud
+                        4. Se generarán los brackets y se limpiará la bandera
+                        
+                        ![Ejemplo](https://via.placeholder.com/400x100?text=Columna+Emparejar+con+SI)
+                        """)
     
     def render_admin(self):
         """Panel de administración"""
@@ -872,69 +1056,16 @@ class WKBApp:
         admin_password = st.secrets["general"].get("admin_password", "admin123")
         
         if password == admin_password:
-            df = self.db.get_all()
+            tabs = st.tabs(["📋 Inscripciones", "🏆 Brackets", "⚙️ Configuración"])
             
-            if not df.empty:
-                # Métricas rápidas
-                stats = self.db.get_stats()
+            with tabs[0]:
+                df = self.db.get_all()
                 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Registros", stats['total'])
-                with col2:
-                    st.metric("Confirmados", stats['confirmados'])
-                with col3:
-                    st.metric("Pendientes", stats['total'] - stats['confirmados'])
-                
-                # Filtros
-                st.markdown("### Filtros")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if 'Categoria' in df.columns:
-                        categorias = ["Todas"] + list(df['Categoria'].unique())
-                        filtro_cat = st.selectbox("Categoría", categorias)
-                
-                with col2:
-                    if 'Estado' in df.columns:
-                        estados = ["Todos"] + list(df['Estado'].unique())
-                        filtro_estado = st.selectbox("Estado", estados)
-                
-                # Aplicar filtros
-                df_filtered = df.copy()
-                
-                if filtro_cat != "Todas":
-                    df_filtered = df_filtered[df_filtered['Categoria'] == filtro_cat]
-                
-                if filtro_estado != "Todos":
-                    df_filtered = df_filtered[df_filtered['Estado'] == filtro_estado]
-                
-                # Mostrar datos
-                st.markdown("### Datos")
-                st.dataframe(
-                    df_filtered,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "ID": st.column_config.TextColumn("ID", width="small"),
-                        "Fecha": st.column_config.DatetimeColumn("Fecha", width="medium"),
-                        "Nombre": st.column_config.TextColumn("Nombre", width="medium"),
-                        "Email": st.column_config.TextColumn("Email", width="medium"),
-                        "Telefono": st.column_config.TextColumn("Teléfono", width="small"),
-                        "Dojo": st.column_config.TextColumn("Dojo", width="small"),
-                        "Categoria": st.column_config.TextColumn("Categoría", width="medium"),
-                        "Pais": st.column_config.TextColumn("País", width="small"),
-                        "Estado": st.column_config.TextColumn("Estado", width="small"),
-                        "Metodo": st.column_config.TextColumn("Método", width="small")
-                    }
-                )
-                
-                # Exportar
-                st.markdown("### Exportar")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    csv = df_filtered.to_csv(index=False)
+                if not df.empty:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    
+                    # Exportar
+                    csv = df.to_csv(index=False)
                     st.download_button(
                         "📥 DESCARGAR CSV",
                         csv,
@@ -942,21 +1073,50 @@ class WKBApp:
                         "text/csv",
                         use_container_width=True
                     )
+                else:
+                    st.info("No hay datos")
+            
+            with tabs[1]:
+                df_brackets = self.db.bracket_manager.get_brackets()
                 
-                with col2:
-                    json_str = df_filtered.to_json(orient='records', indent=2)
+                if not df_brackets.empty:
+                    st.dataframe(df_brackets, use_container_width=True, hide_index=True)
+                    
+                    # Exportar brackets
+                    csv_brackets = df_brackets.to_csv(index=False)
                     st.download_button(
-                        "📥 DESCARGAR JSON",
-                        json_str,
-                        "wkb_inscripciones.json",
-                        "application/json",
+                        "📥 DESCARGAR BRACKETS",
+                        csv_brackets,
+                        "wkb_brackets.csv",
+                        "text/csv",
                         use_container_width=True
                     )
-            else:
-                st.info("No hay datos registrados")
-        
-        elif password:
-            st.error("Contraseña incorrecta")
+                    
+                    # Botón para limpiar brackets
+                    if st.button("🗑️ LIMPIAR BRACKETS", use_container_width=True):
+                        if st.checkbox("Confirmar limpieza"):
+                            df_vacio = pd.DataFrame(columns=df_brackets.columns)
+                            self.db.bracket_manager.save_brackets(df_vacio)
+                            st.success("Brackets eliminados")
+                            st.rerun()
+                else:
+                    st.info("No hay brackets generados")
+            
+            with tabs[2]:
+                st.markdown("### Configuración de Emparejamiento")
+                st.markdown("""
+                **Instrucciones:**
+                
+                1. **Agregar columna 'Emparejar'** en tu hoja de Google Sheets
+                2. **Escribir 'SI'** en cualquier celda para activar la generación
+                3. **Los brackets** se crearán automáticamente en la hoja 'Brackets'
+                4. **La bandera** se limpiará automáticamente después de generar
+                
+                **Formato de la columna:**
+                - `SI` o `ACTIVAR` - Genera brackets
+                - `NO` o vacío - No hace nada
+                - `FORCE` - Fuerza regeneración aunque existan brackets
+                """)
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -972,7 +1132,12 @@ class WKBApp:
         self.render_header()
         
         # Tabs principales
-        tab1, tab2, tab3 = st.tabs(["📊 DASHBOARD", "📝 REGISTRO", "⚙️ ADMIN"])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 DASHBOARD", 
+            "📝 REGISTRO", 
+            "🏆 BRACKETS", 
+            "⚙️ ADMIN"
+        ])
         
         with tab1:
             self.render_dashboard()
@@ -981,6 +1146,9 @@ class WKBApp:
             self.render_registration()
         
         with tab3:
+            self.render_brackets_tab()
+        
+        with tab4:
             self.render_admin()
         
         # Footer
@@ -988,7 +1156,7 @@ class WKBApp:
         st.markdown("""
         <div style="text-align:center; color:#666; padding:2rem 0;">
             <p>© 2024 World Kyokushin Budokai Chile. Todos los derechos reservados.</p>
-            <p style="font-size:0.8rem;">Versión 2.0.0 | Sistema de Inscripciones Oficial</p>
+            <p style="font-size:0.8rem;">Versión 3.0.0 | Sistema de Inscripciones y Brackets</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -996,4 +1164,3 @@ class WKBApp:
 if __name__ == "__main__":
     app = WKBApp()
     app.run()
-
