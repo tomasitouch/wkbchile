@@ -31,7 +31,7 @@ sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
 
 # === CONSTANTES ===
 LOGO_URL = "https://www.worldkyokushinbudokai.com/assets/custom/img/logo.png"
-PRECIO = 15000
+PRECIO = 150
 PRECIO_GRUPAL = 14000
 FECHA_TORNEO = datetime(2026, 4, 24, 9, 0, 0)
 CODIGO_VIP = "WKB2026"
@@ -1488,4 +1488,5 @@ st.markdown("""
     <p>© 2024 World Kyokushin Budokai Chile · Todos los derechos reservados</p>
 </div>
 """, unsafe_allow_html=True)
+
 
