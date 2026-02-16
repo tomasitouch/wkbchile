@@ -74,6 +74,64 @@ st.markdown("""
         border-radius: 10px;
         text-align: center;
     }
+    /* Tarjetas de mural */
+    .mural-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 20px;
+        padding: 20px 0;
+    }
+    .competitor-card {
+        background: linear-gradient(145deg, #1f2937, #111827);
+        border-radius: 12px;
+        padding: 20px;
+        border-left: 4px solid #FDB931;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        transition: transform 0.2s;
+    }
+    .competitor-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 15px rgba(253, 185, 49, 0.2);
+    }
+    .competitor-name {
+        color: #FDB931;
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+    .competitor-detail {
+        color: #e5e7eb;
+        font-size: 14px;
+        margin: 5px 0;
+        display: flex;
+        align-items: center;
+    }
+    .detail-label {
+        color: #9ca3af;
+        width: 80px;
+        font-size: 12px;
+    }
+    .detail-value {
+        color: #ffffff;
+        font-weight: 500;
+    }
+    .category-badge {
+        background: rgba(253, 185, 49, 0.2);
+        color: #FDB931;
+        padding: 4px 8px;
+        border-radius: 15px;
+        font-size: 11px;
+        font-weight: bold;
+        display: inline-block;
+        margin-top: 10px;
+    }
+    .stats-box {
+        background: #111827;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 20px 0;
+        border: 1px solid #374151;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -183,10 +241,6 @@ def init_mercadopago():
         logger.error(f"Error inicializando MercadoPago: {e}")
         return None
 
-
-
-
-
 def crear_preferencia_pago(datos_comprador, preferencia_id):
     """Crea una preferencia de pago en MercadoPago"""
     sdk = init_mercadopago()
@@ -244,135 +298,6 @@ def crear_preferencia_pago(datos_comprador, preferencia_id):
         logger.error(f"Excepción en MercadoPago: {e}")
         return None
 
-def render_paso2():
-    """Paso 2: Procesar pago"""
-    
-    datos = st.session_state.datos_competidor
-    
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 💳 Confirmar y Pagar")
-    
-    # Resumen de inscripción
-    st.markdown("""
-    <style>
-        .resumen-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px;
-            border-bottom: 1px solid #374151;
-        }
-        .resumen-label {
-            color: #9ca3af;
-        }
-        .resumen-value {
-            color: #FDB931;
-            font-weight: bold;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="resumen-item">
-            <span class="resumen-label">Competidor:</span>
-            <span class="resumen-value">{datos['nombre']}</span>
-        </div>
-        <div class="resumen-item">
-            <span class="resumen-label">Categoría:</span>
-            <span class="resumen-value">{datos['categoria']}</span>
-        </div>
-        <div class="resumen-item">
-            <span class="resumen-label">Dojo:</span>
-            <span class="resumen-value">{datos['dojo']}</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div class="resumen-item">
-            <span class="resumen-label">Email:</span>
-            <span class="resumen-value">{datos['email']}</span>
-        </div>
-        <div class="resumen-item">
-            <span class="resumen-label">Teléfono:</span>
-            <span class="resumen-value">{datos['telefono']}</span>
-        </div>
-        <div class="resumen-item">
-            <span class="resumen-label">ID:</span>
-            <span class="resumen-value">{datos['id_inscripcion']}</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Total
-    st.markdown(f"""
-    <div style="background: #111827; padding: 15px; border-radius: 10px; margin: 20px 0;">
-        <div style="display: flex; justify-content: space-between;">
-            <span style="color: #e5e7eb; font-size: 18px;">Total a pagar:</span>
-            <span style="color: #FDB931; font-size: 24px; font-weight: bold;">${PRECIO_INSCRIPCION:,} CLP</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Botones
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("← VOLVER", use_container_width=True):
-            st.session_state.paso = 'formulario'
-            st.rerun()
-    
-    with col2:
-        if st.button("PAGAR AHORA 💳", type="primary", use_container_width=True):
-            with st.spinner("Preparando pago..."):
-                # Crear preferencia en MercadoPago
-                preferencia_id = f"WKB-{datos['id_inscripcion']}-{int(time.time())}"
-                
-                # CORRECCIÓN: Agregar 'dojo' al diccionario
-                datos_pago = {
-                    "comprador": {
-                        "nombre": datos["nombre"],
-                        "email": datos["email"],
-                        "telefono": datos["telefono"],
-                        "dojo": datos["dojo"]
-                    },
-                    "items": {
-                        "categoria": datos["categoria"]
-                    }
-                }
-                
-                preferencia = crear_preferencia_pago(datos_pago, preferencia_id)
-                
-                if preferencia and "init_point" in preferencia:
-                    # Guardar referencia
-                    st.session_state.preferencia_id = preferencia_id
-                    
-                    # Mostrar link de pago
-                    html_pago = '<div style="text-align: center; margin: 20px 0;">'
-                    html_pago += '<a href="' + preferencia['init_point'] + '" target="_blank">'
-                    html_pago += '<button style="background: #00aaff; color: white; padding: 15px 30px; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer;">'
-                    html_pago += '🔗 HAZ CLIC PARA PAGAR'
-                    html_pago += '</button>'
-                    html_pago += '</a>'
-                    html_pago += '</div>'
-                    st.markdown(html_pago, unsafe_allow_html=True)
-                    
-                    st.info("⚠️ Después de pagar, espera la confirmación automática")
-                    
-                    # Botón para simular pago (desarrollo)
-                    if st.button("✅ SIMULAR PAGO EXITOSO (solo pruebas)", use_container_width=True):
-                        st.session_state.paso = 'confirmacion'
-                        st.rerun()
-                else:
-                    st.error("Error al crear el pago. Intenta nuevamente.")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-
 def verificar_pago(payment_id):
     """Verifica el estado de un pago"""
     sdk = init_mercadopago()
@@ -403,7 +328,117 @@ def generar_id_unico():
     """Genera ID único para la inscripción"""
     return str(uuid.uuid4()).replace('-', '')[:12].upper()
 
-# --- 7. FORMULARIO DE INSCRIPCIÓN ---
+# --- 7. NUEVA FUNCIÓN: MURAL DE INSCRITOS ---
+def render_mural():
+    """Muestra un mural con todos los inscritos"""
+    
+    st.markdown('<h1 class="title">🥋 MURAL DE COMPETIDORES</h1>', unsafe_allow_html=True)
+    
+    # Botón para volver
+    if st.button("← VOLVER AL INICIO", use_container_width=True):
+        st.session_state.pagina = 'principal'
+        st.rerun()
+    
+    # Cargar datos
+    df = cargar_inscripciones()
+    
+    if df.empty:
+        st.info("📭 No hay inscritos aún. ¡Sé el primero en inscribirte!")
+        return
+    
+    # Filtrar solo confirmados
+    df_confirmados = df[df['Estado_Pago'] == 'Confirmado'].copy()
+    
+    if df_confirmados.empty:
+        st.info("⏳ No hay inscripciones confirmadas todavía.")
+        return
+    
+    # Estadísticas
+    st.markdown('<div class="stats-box">', unsafe_allow_html=True)
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Inscritos", len(df_confirmados))
+    with col2:
+        st.metric("Categorías", len(df_confirmados['Categoria'].unique()))
+    with col3:
+        st.metric("Dojos", len(df_confirmados['Dojo'].unique()))
+    with col4:
+        total_recaudado = len(df_confirmados) * PRECIO_INSCRIPCION
+        st.metric("Total Recaudado", f"${total_recaudado:,}")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Filtros
+    st.markdown("### 🔍 Filtrar por Categoría")
+    
+    # Selector de categoría
+    categorias_disponibles = ['Todas'] + sorted(df_confirmados['Categoria'].unique().tolist())
+    categoria_seleccionada = st.selectbox("Selecciona una categoría", categorias_disponibles)
+    
+    # Búsqueda por nombre
+    busqueda = st.text_input("🔎 Buscar por nombre del competidor", placeholder="Escribe un nombre...")
+    
+    # Aplicar filtros
+    df_filtrado = df_confirmados.copy()
+    
+    if categoria_seleccionada != 'Todas':
+        df_filtrado = df_filtrado[df_filtrado['Categoria'] == categoria_seleccionada]
+    
+    if busqueda:
+        df_filtrado = df_filtrado[df_filtrado['Nombre_Completo'].str.contains(busqueda, case=False, na=False)]
+    
+    # Mostrar resultados
+    st.markdown(f"### 📋 Mostrando {len(df_filtrado)} competidores")
+    
+    # Crear mural de tarjetas
+    st.markdown('<div class="mural-container">', unsafe_allow_html=True)
+    
+    for _, row in df_filtrado.iterrows():
+        # Formatear fecha
+        fecha = row.get('Fecha_Registro', '')
+        if fecha and len(str(fecha)) > 10:
+            fecha = str(fecha)[:10]
+        else:
+            fecha = 'Fecha no disponible'
+        
+        # Crear tarjeta HTML
+        card_html = f'''
+        <div class="competitor-card">
+            <div class="competitor-name">{row['Nombre_Completo']}</div>
+            <div class="competitor-detail">
+                <span class="detail-label">Dojo:</span>
+                <span class="detail-value">{row.get('Dojo', 'No especificado')}</span>
+            </div>
+            <div class="competitor-detail">
+                <span class="detail-label">Edad:</span>
+                <span class="detail-value">{row.get('Edad', 'N/A')} años</span>
+            </div>
+            <div class="competitor-detail">
+                <span class="detail-label">ID:</span>
+                <span class="detail-value">{row.get('ID_Inscripcion', 'N/A')}</span>
+            </div>
+            <div class="competitor-detail">
+                <span class="detail-label">Fecha:</span>
+                <span class="detail-value">{fecha}</span>
+            </div>
+            <div class="category-badge">{row['Categoria']}</div>
+        </div>
+        '''
+        st.markdown(card_html, unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Opción de descarga
+    if st.button("📥 DESCARGAR LISTA COMPLETA (CSV)", use_container_width=True):
+        csv = df_filtrado.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "📥 Confirmar Descarga",
+            csv,
+            f"inscritos_wkb_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv"
+        )
+
+# --- 8. FORMULARIO DE INSCRIPCIÓN ---
 def render_formulario():
     """Renderiza el formulario de inscripción"""
     
@@ -523,9 +558,6 @@ def render_paso1():
     </div>
     """, unsafe_allow_html=True)
 
-
-
-
 def render_paso2():
     """Paso 2: Procesar pago"""
     
@@ -653,12 +685,6 @@ def render_paso2():
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-
-
-
-
-
-
 def render_paso3():
     """Paso 3: Confirmación exitosa"""
     
@@ -715,13 +741,19 @@ def render_paso3():
             </div>
             """, unsafe_allow_html=True)
             
-            # Botón para nueva inscripción
-            if st.button("📝 NUEVA INSCRIPCIÓN", use_container_width=True):
-                # Limpiar estado
-                for key in ['paso', 'datos_competidor', 'preferencia_id']:
-                    if key in st.session_state:
-                        del st.session_state[key]
-                st.rerun()
+            # Botones para navegación
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📝 NUEVA INSCRIPCIÓN", use_container_width=True):
+                    # Limpiar estado
+                    for key in ['paso', 'datos_competidor', 'preferencia_id']:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.rerun()
+            with col2:
+                if st.button("👥 VER MURAL DE INSCRITOS", use_container_width=True):
+                    st.session_state.pagina = 'mural'
+                    st.rerun()
         else:
             st.error("Error guardando la inscripción. Contacta al organizador.")
             st.session_state.paso = 'error'
@@ -744,7 +776,7 @@ def render_error():
                 del st.session_state[key]
         st.rerun()
 
-# --- 8. PANEL ADMIN SIMPLE ---
+# --- 9. PANEL ADMIN ---
 def render_admin():
     """Panel de administración básico"""
     
@@ -784,9 +816,62 @@ def render_admin():
         else:
             st.info("No hay inscripciones aún")
 
-# --- 9. MAIN ---
+# --- 10. PÁGINA PRINCIPAL ---
+def render_principal():
+    """Página principal con menú de opciones"""
+    
+    st.markdown('<h1 class="title">🥋 WKB CHILE</h1>', unsafe_allow_html=True)
+    
+    # Logo
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", use_container_width=True)
+    
+    # Mensaje de bienvenida
+    st.markdown("""
+    <div class="card" style="text-align: center;">
+        <h2 style="color: #FDB931;">BIENVENIDO AL TORNEO WKB 2025</h2>
+        <p style="color: #e5e7eb; font-size: 16px;">
+            El torneo de karate más importante de Chile
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Opciones principales
+    st.markdown("### 📋 MENÚ PRINCIPAL")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📝 INSCRIBIRSE", use_container_width=True):
+            st.session_state.pagina = 'formulario'
+            st.rerun()
+    
+    with col2:
+        if st.button("👥 VER MURAL DE INSCRITOS", use_container_width=True):
+            st.session_state.pagina = 'mural'
+            st.rerun()
+    
+    # Admin link pequeño
+    st.markdown("---")
+    if st.button("⚙️ Admin", use_container_width=True):
+        st.session_state.pagina = 'admin'
+        st.rerun()
+    
+    # Información adicional
+    st.markdown("""
+    <div style="text-align: center; color: #9ca3af; margin-top: 30px;">
+        <p>📅 15-16 Marzo 2025 | 📍 Gimnasio Polideportivo, Santiago</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- 11. MAIN ---
 def main():
     """Función principal"""
+    
+    # Inicializar estado de página
+    if 'pagina' not in st.session_state:
+        st.session_state.pagina = 'principal'
     
     # Parámetros de URL
     query_params = st.query_params
@@ -797,15 +882,14 @@ def main():
             st.session_state.paso = 'confirmacion'
             st.rerun()
     
-    # Navegación
-    st.sidebar.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", width=100)
-    st.sidebar.title("WKB CHILE")
-    
-    opcion = st.sidebar.radio("Menú", ["📝 Inscripción", "⚙️ Admin"])
-    
-    if opcion == "📝 Inscripción":
+    # Navegación según estado
+    if st.session_state.pagina == 'principal':
+        render_principal()
+    elif st.session_state.pagina == 'formulario':
         render_formulario()
-    else:
+    elif st.session_state.pagina == 'mural':
+        render_mural()
+    elif st.session_state.pagina == 'admin':
         render_admin()
 
 if __name__ == "__main__":
