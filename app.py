@@ -183,6 +183,10 @@ def init_mercadopago():
         logger.error(f"Error inicializando MercadoPago: {e}")
         return None
 
+
+
+
+
 def crear_preferencia_pago(datos_comprador, preferencia_id):
     """Crea una preferencia de pago en MercadoPago"""
     sdk = init_mercadopago()
@@ -201,7 +205,7 @@ def crear_preferencia_pago(datos_comprador, preferencia_id):
                 "quantity": 1,
                 "currency_id": "CLP",
                 "unit_price": PRECIO_INSCRIPCION,
-                "description": f"Competidor: {comprador['nombre']} - Dojo: {comprador['dojo']}"
+                "description": f"Competidor: {comprador['nombre']} - Dojo: {comprador.get('dojo', 'No especificado')}"
             }
         ],
         "payer": {
@@ -212,13 +216,13 @@ def crear_preferencia_pago(datos_comprador, preferencia_id):
             }
         },
         "back_urls": {
-            "success": "https://wkb-torneo.streamlit.app/?success=true",
-            "failure": "https://wkb-torneo.streamlit.app/?failure=true",
-            "pending": "https://wkb-torneo.streamlit.app/?pending=true"
+            "success": "https://wkbchile.streamlit.app/?success=true",
+            "failure": "https://wkbchile.streamlit.app/?failure=true",
+            "pending": "https://wkbchile.streamlit.app/?pending=true"
         },
         "auto_return": "approved",
         "external_reference": preferencia_id,
-        "notification_url": "https://tu-dominio.com/webhook/mercadopago",
+        "notification_url": "https://wkbchile.streamlit.app/webhook",
         "statement_descriptor": "WKB CHILE",
         "payment_methods": {
             "excluded_payment_types": [
@@ -239,6 +243,135 @@ def crear_preferencia_pago(datos_comprador, preferencia_id):
     except Exception as e:
         logger.error(f"Excepción en MercadoPago: {e}")
         return None
+
+def render_paso2():
+    """Paso 2: Procesar pago"""
+    
+    datos = st.session_state.datos_competidor
+    
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 💳 Confirmar y Pagar")
+    
+    # Resumen de inscripción
+    st.markdown("""
+    <style>
+        .resumen-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #374151;
+        }
+        .resumen-label {
+            color: #9ca3af;
+        }
+        .resumen-value {
+            color: #FDB931;
+            font-weight: bold;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="resumen-item">
+            <span class="resumen-label">Competidor:</span>
+            <span class="resumen-value">{datos['nombre']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">Categoría:</span>
+            <span class="resumen-value">{datos['categoria']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">Dojo:</span>
+            <span class="resumen-value">{datos['dojo']}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="resumen-item">
+            <span class="resumen-label">Email:</span>
+            <span class="resumen-value">{datos['email']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">Teléfono:</span>
+            <span class="resumen-value">{datos['telefono']}</span>
+        </div>
+        <div class="resumen-item">
+            <span class="resumen-label">ID:</span>
+            <span class="resumen-value">{datos['id_inscripcion']}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Total
+    st.markdown(f"""
+    <div style="background: #111827; padding: 15px; border-radius: 10px; margin: 20px 0;">
+        <div style="display: flex; justify-content: space-between;">
+            <span style="color: #e5e7eb; font-size: 18px;">Total a pagar:</span>
+            <span style="color: #FDB931; font-size: 24px; font-weight: bold;">${PRECIO_INSCRIPCION:,} CLP</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Botones
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("← VOLVER", use_container_width=True):
+            st.session_state.paso = 'formulario'
+            st.rerun()
+    
+    with col2:
+        if st.button("PAGAR AHORA 💳", type="primary", use_container_width=True):
+            with st.spinner("Preparando pago..."):
+                # Crear preferencia en MercadoPago
+                preferencia_id = f"WKB-{datos['id_inscripcion']}-{int(time.time())}"
+                
+                # CORRECCIÓN: Agregar 'dojo' al diccionario
+                datos_pago = {
+                    "comprador": {
+                        "nombre": datos["nombre"],
+                        "email": datos["email"],
+                        "telefono": datos["telefono"],
+                        "dojo": datos["dojo"]
+                    },
+                    "items": {
+                        "categoria": datos["categoria"]
+                    }
+                }
+                
+                preferencia = crear_preferencia_pago(datos_pago, preferencia_id)
+                
+                if preferencia and "init_point" in preferencia:
+                    # Guardar referencia
+                    st.session_state.preferencia_id = preferencia_id
+                    
+                    # Mostrar link de pago
+                    html_pago = '<div style="text-align: center; margin: 20px 0;">'
+                    html_pago += '<a href="' + preferencia['init_point'] + '" target="_blank">'
+                    html_pago += '<button style="background: #00aaff; color: white; padding: 15px 30px; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer;">'
+                    html_pago += '🔗 HAZ CLIC PARA PAGAR'
+                    html_pago += '</button>'
+                    html_pago += '</a>'
+                    html_pago += '</div>'
+                    st.markdown(html_pago, unsafe_allow_html=True)
+                    
+                    st.info("⚠️ Después de pagar, espera la confirmación automática")
+                    
+                    # Botón para simular pago (desarrollo)
+                    if st.button("✅ SIMULAR PAGO EXITOSO (solo pruebas)", use_container_width=True):
+                        st.session_state.paso = 'confirmacion'
+                        st.rerun()
+                else:
+                    st.error("Error al crear el pago. Intenta nuevamente.")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 
 def verificar_pago(payment_id):
     """Verifica el estado de un pago"""
