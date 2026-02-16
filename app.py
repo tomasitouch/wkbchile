@@ -9,7 +9,7 @@ from datetime import datetime
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="WKB WORLD CUP 2026",
+    page_title="WKB ALL AMERICAN 2026",
     page_icon="🥋",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -412,3 +412,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
