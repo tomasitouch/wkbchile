@@ -1,162 +1,208 @@
 import streamlit as st
-from streamlit_option_menu import option_menu
-import pages.inicio as inicio
-import pages.inscripciones as inscripciones
-import pages.mural as mural
-import pages.admin as admin
-import pages.pago as pago
+import pandas as pd
+from streamlit_gsheets import GSheetsConnection
+import uuid
+import datetime
+import re
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="WKB Torneo Oficial",
+    page_title="WKB Inscripciones",
     page_icon="🥋",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="centered"
 )
 
-# Meta tags para móvil y SEO
+# --- ESTILOS BÁSICOS ---
 st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Sistema de inscripciones oficial del Torneo WKB Chile 2025">
-<meta name="keywords" content="karate, WKB, torneo, inscripciones, artes marciales">
-<title>WKB Chile - Torneo Oficial 2025</title>
 <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stApp {
-        background: linear-gradient(135deg, #0e1117 0%, #1a1f2e 100%);
-    }
-    /* Estilos globales */
-    .title {
+    .main-title {
         color: #FDB931;
         font-size: 32px;
         font-weight: bold;
         text-align: center;
-        margin-bottom: 30px;
-        text-transform: uppercase;
-        letter-spacing: 2px;
+        margin: 20px 0;
     }
-    .card {
+    .form-container {
         background: #1f2937;
+        padding: 30px;
         border-radius: 15px;
-        padding: 25px;
         border: 1px solid #374151;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-        margin-bottom: 20px;
     }
-    /* Header con logo */
-    .header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px 20px;
-        background: linear-gradient(180deg, #1f2937 0%, #0e1117 100%);
-        border-bottom: 1px solid #374151;
-        margin-bottom: 20px;
-    }
-    .logo-text {
-        color: #FDB931;
-        font-weight: bold;
-        font-size: 20px;
-    }
-    @media (max-width: 768px) {
-        .title { font-size: 24px; }
+    .success-box {
+        background: rgba(16, 185, 129, 0.2);
+        border: 1px solid #10b981;
+        color: #10b981;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- HEADER COMÚN ---
-def render_header():
+# --- CONSTANTES ---
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1hFlkSSPWqoQDSjkiPV5uaIIx-iHjoihLg2yokDJm-4E/edit?gid=0#gid=0"
+CATEGORIAS = [
+    "KUMITE -65kg (18+)",
+    "KUMITE -70kg (18+)",
+    "KUMITE -75kg (18+)",
+    "KUMITE -80kg (18+)",
+    "KUMITE -90kg (18+)",
+    "KUMITE +90kg (18+)",
+    "KUMITE -55kg (18+) Femenino",
+    "KUMITE -60kg (18+) Femenino",
+    "KUMITE +65kg (18+) Femenino",
+    "KATA (18+) Mixto"
+]
+
+# --- CONEXIÓN SHEETS ---
+@st.cache_resource
+def get_connection():
+    return st.connection("gsheets", type=GSheetsConnection)
+
+def guardar_inscripcion(datos):
+    """Guarda en tiempo real en sheets"""
+    try:
+        conn = get_connection()
+        
+        # Leer datos existentes
+        df_existente = conn.read(worksheet="Inscripciones")
+        
+        # Crear nueva fila
+        nueva_fila = pd.DataFrame([datos])
+        
+        # Combinar
+        if df_existente.empty:
+            df_final = nueva_fila
+        else:
+            df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
+        
+        # Guardar en sheets
+        conn.update(worksheet="Inscripciones", data=df_final)
+        
+        # Backup automático
+        try:
+            conn.update(worksheet="Backup", data=df_final)
+        except:
+            pass
+            
+        return True
+    except Exception as e:
+        st.error(f"Error guardando: {e}")
+        return False
+
+# --- FUNCIONES DE VALIDACIÓN ---
+def validar_email(email):
+    patron = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+    return re.match(patron, email) is not None
+
+def validar_telefono(telefono):
+    telefono = re.sub(r'\D', '', telefono)
+    return len(telefono) == 9 and telefono[0] in ['9', '2']
+
+# --- PÁGINA PRINCIPAL ---
+def main():
+    st.markdown('<h1 class="main-title">🥋 WKB CHILE - INSCRIPCIONES</h1>', unsafe_allow_html=True)
+    
+    # Logo
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.markdown("""
-        <div style="text-align: center; padding: 10px;">
-            <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s" 
-                 style="height: 60px; margin-bottom: 10px;">
-            <h1 style="color: #FDB931; margin: 0; font-size: 24px;">WKB CHILE</h1>
-            <p style="color: #9ca3af; margin: 0;">TORNEO OFICIAL 2025</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-# --- SISTEMA DE RUTAS / URLS ---
-def get_current_page():
-    """Obtiene la página actual basada en la URL"""
-    query_params = st.query_params
-    return query_params.get("page", ["inicio"])[0]
-
-def set_page(page):
-    """Cambia la página actual actualizando la URL"""
-    st.query_params["page"] = page
-    st.rerun()
-
-# --- MENÚ DE NAVEGACIÓN ---
-def render_navigation():
-    """Renderiza el menú de navegación con st.query_params"""
+        st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR-PCwsXVnqhlX-vNev8BDqbszitBpm3cC8GQ&s", use_container_width=True)
     
-    current_page = get_current_page()
+    # Información del torneo
+    st.info("📅 15-16 Marzo 2025 | 📍 Gimnasio Polideportivo, Santiago")
     
-    # Mapeo de páginas a nombres amigables
-    pages_map = {
-        "inicio": "🏠 Inicio",
-        "inscripciones": "📝 Inscripciones",
-        "mural": "👥 Mural",
-        "admin": "⚙️ Admin"
-    }
+    # --- FORMULARIO DE INSCRIPCIÓN ---
+    with st.container():
+        st.markdown('<div class="form-container">', unsafe_allow_html=True)
+        st.subheader("📝 Datos del Competidor")
+        
+        with st.form("form_inscripcion"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nombre = st.text_input("Nombre Completo *", placeholder="Ej: Juan Pérez")
+                edad = st.number_input("Edad *", min_value=18, max_value=99, step=1)
+                email = st.text_input("Email *", placeholder="ejemplo@correo.com")
+            
+            with col2:
+                dojo = st.text_input("Dojo/Escuela *", placeholder="Ej: WKB Santiago")
+                telefono = st.text_input("Teléfono *", placeholder="Ej: 912345678")
+                categoria = st.selectbox("Categoría *", CATEGORIAS)
+            
+            st.markdown("---")
+            acepta = st.checkbox("Acepto los términos y condiciones del torneo *")
+            
+            # Botón de envío
+            submit = st.form_submit_button("✅ INSCRIBIRME", type="primary", use_container_width=True)
+            
+            if submit:
+                # Validaciones
+                errores = []
+                if not nombre:
+                    errores.append("Nombre es obligatorio")
+                if not email or not validar_email(email):
+                    errores.append("Email inválido")
+                if not telefono or not validar_telefono(telefono):
+                    errores.append("Teléfono inválido (formato: 912345678)")
+                if not dojo:
+                    errores.append("Dojo es obligatorio")
+                if not acepta:
+                    errores.append("Debes aceptar los términos")
+                
+                if errores:
+                    for error in errores:
+                        st.error(error)
+                else:
+                    # Preparar datos
+                    id_unico = str(uuid.uuid4())[:8].upper()
+                    fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    datos_inscripcion = {
+                        "ID": id_unico,
+                        "Fecha": fecha_actual,
+                        "Nombre": nombre,
+                        "Edad": edad,
+                        "Email": email,
+                        "Telefono": telefono,
+                        "Dojo": dojo,
+                        "Categoria": categoria,
+                        "Estado": "Pendiente"
+                    }
+                    
+                    # Guardar en sheets (tiempo real)
+                    with st.spinner("Guardando inscripción..."):
+                        if guardar_inscripcion(datos_inscripcion):
+                            st.balloons()
+                            st.markdown(f'''
+                            <div class="success-box">
+                                <h3>✅ ¡INSCRIPCIÓN REGISTRADA!</h3>
+                                <p>Tu número de inscripción es: <strong>{id_unico}</strong></p>
+                                <p>Te contactaremos para confirmar el pago.</p>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                            
+                            # Mostrar resumen
+                            with st.expander("📋 Ver resumen de tu inscripción"):
+                                st.json(datos_inscripcion)
+                            
+                            # Botón para nueva inscripción
+                            if st.button("📝 NUEVA INSCRIPCIÓN"):
+                                st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    # Crear menú horizontal con columnas
-    cols = st.columns(len(pages_map))
-    
-    for i, (page_key, page_name) in enumerate(pages_map.items()):
-        with cols[i]:
-            # Estilo diferente para la página activa
-            if current_page == page_key:
-                st.markdown(f"""
-                <div style="text-align: center; padding: 10px; 
-                            background: rgba(253, 185, 49, 0.2); 
-                            border-radius: 10px;
-                            border: 1px solid #FDB931;">
-                    <span style="color: #FDB931; font-weight: bold;">{page_name}</span>
-                </div>
-                """, unsafe_allow_html=True)
+    # --- VER INSCRITOS (opcional) ---
+    with st.expander("👥 Ver inscritos actuales"):
+        try:
+            conn = get_connection()
+            df = conn.read(worksheet="Inscripciones")
+            if not df.empty:
+                st.dataframe(df, use_container_width=True)
+                st.caption(f"Total: {len(df)} inscripciones")
             else:
-                if st.button(page_name, key=f"nav_{page_key}", use_container_width=True):
-                    set_page(page_key)
-    
-    st.markdown("---")
-
-# --- FUNCIÓN PRINCIPAL ---
-def main():
-    """Función principal con enrutamiento"""
-    
-    # Renderizar header común
-    render_header()
-    
-    # Renderizar navegación
-    render_navigation()
-    
-    # Obtener página actual
-    current_page = get_current_page()
-    
-    # Enrutamiento
-    if current_page == "inicio":
-        import pages.inicio as inicio
-        inicio.show()
-    elif current_page == "inscripciones":
-        import pages.inscripciones as inscripciones
-        inscripciones.show()
-    elif current_page == "mural":
-        import pages.mural as mural
-        mural.show()
-    elif current_page == "admin":
-        import pages.admin as admin
-        admin.show()
-    elif current_page == "pago":
-        import pages.pago as pago
-        pago.show()
-    else:
-        # Página no encontrada, redirigir a inicio
-        set_page("inicio")
+                st.info("No hay inscritos aún")
+        except:
+            st.warning("No se pudo cargar la lista")
 
 if __name__ == "__main__":
     main()
