@@ -3,27 +3,65 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import mercadopago
 import uuid
-from datetime import datetime
 import re
+import time
+from datetime import datetime
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="WKB Chile | Registro Oficial",
+    page_title="Inscripción Oficial WKB 2025",
     page_icon="🥋",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# --- ESTILOS PERSONALIZADOS ---
+# --- CSS PERSONALIZADO (Estética Profesional) ---
 st.markdown("""
     <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .stButton>button { border-radius: 5px; height: 3em; font-weight: bold; }
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Roboto', sans-serif;
+    }
+    
+    .stButton>button {
+        background-color: #00A650; /* Verde MercadoPago */
+        color: white;
+        border-radius: 8px;
+        height: 50px;
+        font-weight: bold;
+        font-size: 18px;
+        border: none;
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        background-color: #008f45;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    .header-style {
+        font-size: 24px;
+        font-weight: 700;
+        color: #333;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #E6E6E6;
+        padding-bottom: 10px;
+    }
+    
+    .success-box {
+        padding: 20px;
+        background-color: #D4EDDA;
+        color: #155724;
+        border-radius: 10px;
+        border: 1px solid #C3E6CB;
+        text-align: center;
+        margin-bottom: 20px;
+    }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --- CONSTANTES Y CONFIGURACIÓN ---
+# --- CONSTANTES ---
 PRECIO = 15000
 CATEGORIAS = [
     "KUMITE -65kg (18+)", "KUMITE -70kg (18+)", "KUMITE -75kg (18+)",
@@ -32,189 +70,256 @@ CATEGORIAS = [
     "KUMITE +65kg (18+) Femenino", "KATA (18+) Mixto"
 ]
 
-# --- LÓGICA DE DATOS ---
-def get_conn():
+# --- GESTIÓN DE ESTADO ---
+if 'user_data' not in st.session_state:
+    st.session_state.user_data = {}
+if 'step' not in st.session_state:
+    st.session_state.step = 1
+
+# --- FUNCIONES BACKEND ---
+
+def get_db_connection():
+    """Conexión a Google Sheets"""
     return st.connection("gsheets", type=GSheetsConnection)
 
-def cargar_datos():
-    conn = get_conn()
+def get_all_registrations():
+    """Obtiene todos los registros actuales"""
+    conn = get_db_connection()
     try:
-        # Forzamos ttl=0 para datos críticos de inscripción
-        return conn.read(worksheet="Inscripciones", ttl=0)
-    except Exception:
-        return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Dojo", "Categoria", "Estado"])
+        return conn.read(worksheet="Inscripciones", ttl=0) # ttl=0 para datos frescos
+    except:
+        return pd.DataFrame(columns=["ID", "Fecha", "Nombre", "Email", "Dojo", "Categoria", "Estado", "Metodo", "Payment_ID"])
 
-def validar_email(email):
-    return re.match(r"[^@]+@[^@]+\.[^@]+", email)
+def save_registration(data, payment_id="MANUAL"):
+    """Guarda una nueva inscripción en Sheets"""
+    conn = get_db_connection()
+    try:
+        df_existente = get_all_registrations()
+        
+        # Verificar si el ID ya existe para evitar duplicados al refrescar
+        if not df_existente.empty and data['id'] in df_existente['ID'].values:
+            return True # Ya existe, tratamos como éxito
 
-# --- INTEGRACIÓN MERCADOPAGO ---
-def generar_link_pago(datos):
+        nueva_fila = {
+            "ID": data['id'],
+            "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Nombre": data['nombre'],
+            "Email": data['email'],
+            "Dojo": data['dojo'],
+            "Categoria": data['categoria'],
+            "Telefono": data['telefono'],
+            "Edad": data['edad'],
+            "Estado": "CONFIRMADO",
+            "Metodo": "MercadoPago" if payment_id != "MANUAL" else "Manual/Admin",
+            "Payment_ID": payment_id
+        }
+        
+        df_nueva = pd.DataFrame([nueva_fila])
+        df_final = pd.concat([df_existente, df_nueva], ignore_index=True)
+        conn.update(worksheet="Inscripciones", data=df_final)
+        return True
+    except Exception as e:
+        st.error(f"Error guardando datos: {e}")
+        return False
+
+def create_mercadopago_preference(user_data):
+    """Genera el link de pago"""
     try:
         sdk = mercadopago.SDK(st.secrets["mercadopago"]["access_token"])
+        
+        base_url = st.secrets["general"]["public_url"]
+        
         preference_data = {
-            "items": [{
-                "title": f"Inscripción Torneo WKB - {datos['categoria']}",
-                "quantity": 1,
-                "unit_price": PRECIO,
-                "currency_id": "CLP"
-            }],
-            "payer": {"email": datos['email'], "name": datos['nombre']},
+            "items": [
+                {
+                    "id": "INS-WKB-2025",
+                    "title": f"Inscripción Torneo WKB - {user_data['categoria']}",
+                    "quantity": 1,
+                    "currency_id": "CLP",
+                    "unit_price": float(PRECIO)
+                }
+            ],
+            "payer": {
+                "name": user_data['nombre'],
+                "email": user_data['email']
+            },
             "back_urls": {
-                "success": "https://wkbchile.streamlit.app/", # Cambiar por tu URL real
-                "failure": "https://wkbchile.streamlit.app/"
+                "success": f"{base_url}?status=approved",
+                "failure": f"{base_url}?status=failure",
+                "pending": f"{base_url}?status=pending"
             },
             "auto_return": "approved",
-            "external_reference": datos['id']
+            "external_reference": user_data['id'],
+            "statement_descriptor": "WKB CHILE"
         }
-        result = sdk.preference().create(preference_data)
-        return result["response"]["init_point"]
+        
+        preference_response = sdk.preference().create(preference_data)
+        return preference_response["response"]["init_point"]
     except Exception as e:
-        st.error(f"Error al conectar con MercadoPago: {e}")
+        st.error(f"Error conectando con MercadoPago: {e}")
         return None
 
-# --- COMPONENTES DE INTERFAZ ---
-def sidebar_stats(df):
-    with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/3003/3003831.png", width=100) # Reemplazar con logo WKB
-        st.title("Panel de Control")
-        
-        if not df.empty:
-            confirmados = len(df[df['Estado'] == 'Confirmado'])
-            st.metric("Total Competidores", f"{confirmados} / 500")
-            st.progress(min(confirmados / 500, 1.0))
-        
-        st.divider()
-        st.info("📅 15-16 Marzo 2025\n\n📍 Gimnasio Polideportivo, Santiago")
+def validar_form(nombre, email, dojo, telefono):
+    if not nombre or len(nombre) < 3: return False, "Nombre inválido"
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", email): return False, "Email inválido"
+    if not dojo: return False, "Falta el Dojo"
+    if not telefono: return False, "Falta teléfono"
+    return True, ""
 
-def formulario():
-    st.subheader("📝 Formulario de Inscripción")
+# --- INTERFAZ DE USUARIO ---
+
+def show_header():
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        st.write("🥋") # Aquí podrías poner st.image("logo.png")
+    with col2:
+        st.title("WKB Chile | Inscripción 2025")
+        st.markdown("**Fecha:** 15-16 Marzo 2025 | **Lugar:** Polideportivo Santiago")
+
+def step_1_form():
+    st.markdown('<div class="header-style">1. Datos del Competidor</div>', unsafe_allow_html=True)
     
     with st.container(border=True):
-        with st.form("registro_form", clear_on_submit=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                nombre = st.text_input("Nombre Completo")
-                email = st.text_input("Correo Electrónico")
-                telefono = st.text_input("WhatsApp (ej: +569...)")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            nombre = st.text_input("Nombre Completo")
+            email = st.text_input("Correo Electrónico")
+            telefono = st.text_input("Teléfono / WhatsApp")
             
-            with col2:
-                dojo = st.text_input("Nombre del Dojo / Escuela")
-                edad = st.number_input("Edad", 5, 80, 18)
-                categoria = st.selectbox("Categoría de Competición", CATEGORIAS)
+        with col2:
+            edad = st.number_input("Edad", min_value=18, max_value=99, value=25)
+            dojo = st.text_input("Dojo / Escuela")
+            categoria = st.selectbox("Categoría", CATEGORIAS)
             
-            st.markdown("---")
-            enviar = st.form_submit_button("VALIDAR Y PROCEDER AL PAGO", use_container_width=True)
-
-        if enviar:
-            if not nombre or not dojo or not validar_email(email):
-                st.error("Por favor, completa todos los campos correctamente.")
-            else:
-                st.session_state.temp_datos = {
-                    "id": str(uuid.uuid4())[:8].upper(),
+        if st.button("CONTINUAR AL PAGO ➡️"):
+            valid, msg = validar_form(nombre, email, dojo, telefono)
+            if valid:
+                st.session_state.user_data = {
+                    "id": str(uuid.uuid4())[:12].upper(),
                     "nombre": nombre,
                     "email": email,
                     "telefono": telefono,
-                    "dojo": dojo,
                     "edad": edad,
+                    "dojo": dojo,
                     "categoria": categoria
                 }
-                st.session_state.paso = "pago"
+                st.session_state.step = 2
                 st.rerun()
+            else:
+                st.error(msg)
 
-def checkout():
-    datos = st.session_state.temp_datos
-    st.subheader("💳 Confirmación de Pago")
+def step_2_payment():
+    st.markdown('<div class="header-style">2. Confirmar y Pagar</div>', unsafe_allow_html=True)
     
-    col1, col2 = st.columns([1, 2])
+    data = st.session_state.user_data
+    
+    col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.write("**Resumen de Inscripción:**")
-        st.json(datos)
-        if st.button("⬅️ Corregir Datos"):
-            st.session_state.paso = "registro"
+        st.info("📋 **Resumen de Inscripción**")
+        st.write(f"**Atleta:** {data['nombre']}")
+        st.write(f"**Categoría:** {data['categoria']}")
+        st.write(f"**Dojo:** {data['dojo']}")
+        st.markdown(f"### Total: ${PRECIO:,.0f} CLP")
+        
+        if st.button("⬅️ Corregir datos"):
+            st.session_state.step = 1
             st.rerun()
 
     with col2:
-        st.warning("Para completar el registro, debes realizar el pago. Una vez aprobado, quedarás inscrito automáticamente.")
+        st.write("Selecciona tu método de pago:")
         
-        link = generar_link_pago(datos)
-        if link:
-            st.link_button("🚀 PAGAR CON MERCADOPAGO", link, use_container_width=True, type="primary")
-            
-            st.divider()
-            with st.expander("¿Ya pagaste o tienes un código de cortesía?"):
-                codigo = st.text_input("Ingresar código")
-                if st.button("Validar Registro"):
-                    if codigo == st.secrets.get("admin_password", "WKB2025"):
-                        completar_registro(datos, "Cortesía/Admin")
-                    else:
-                        st.error("Código inválido")
-
-def completar_registro(datos, metodo):
-    with st.status("Procesando inscripción...", expanded=True) as status:
-        try:
-            conn = get_conn()
-            df_actual = cargar_datos()
-            
-            nuevo_registro = {
-                "ID": datos['id'],
-                "Fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "Nombre": datos['nombre'],
-                "Email": datos['email'],
-                "Dojo": datos['dojo'],
-                "Categoria": datos['categoria'],
-                "Estado": "Confirmado",
-                "Metodo": metodo
-            }
-            
-            df_final = pd.concat([df_actual, pd.DataFrame([nuevo_registro])], ignore_index=True)
-            conn.update(worksheet="Inscripciones", data=df_final)
-            
-            status.update(label="¡Inscripción Exitosa!", state="complete", expanded=False)
-            st.balloons()
-            st.success(f"Felicidades {datos['nombre']}, ya estás registrado.")
-            
-            # Limpieza de sesión
-            for key in ['temp_datos', 'paso']:
-                if key in st.session_state: del st.session_state[key]
-            
-            if st.button("Hacer otra inscripción"):
-                st.rerun()
-        except Exception as e:
-            st.error(f"Error al guardar: {e}")
-
-# --- APP PRINCIPAL ---
-def main():
-    if 'paso' not in st.session_state:
-        st.session_state.paso = "registro"
-
-    df_total = cargar_datos()
-    sidebar_stats(df_total)
-
-    tab_reg, tab_lista, tab_admin = st.tabs(["Registro", "Inscritos", "Administración"])
-
-    with tab_reg:
-        if st.session_state.paso == "registro":
-            formulario()
-        elif st.session_state.paso == "pago":
-            checkout()
-
-    with tab_lista:
-        st.subheader("Participantes Confirmados")
-        if not df_total.empty:
-            search = st.text_input("Buscar por nombre o dojo")
-            mask = df_total['Nombre'].str.contains(search, case=False) | df_total['Dojo'].str.contains(search, case=False)
-            st.dataframe(df_total[mask][["Nombre", "Dojo", "Categoria"]], use_container_width=True)
+        # Generar Link MP
+        mp_link = create_mercadopago_preference(data)
+        
+        if mp_link:
+            st.link_button("💳 PAGAR AHORA CON MERCADOPAGO", mp_link, use_container_width=True)
+            st.caption("Serás redirigido a Mercado Pago de forma segura. Al finalizar, volverás automáticamente aquí.")
         else:
-            st.info("Aún no hay inscritos.")
+            st.error("No se pudo generar el link de pago. Intenta más tarde.")
 
-    with tab_admin:
-        pw = st.text_input("Acceso Admin", type="password")
-        if pw == st.secrets.get("admin_password", "admin123"):
-            st.download_button("Descargar Base de Datos (CSV)", 
-                             df_total.to_csv(index=False), 
-                             "inscritos_wkb.csv", "text/csv")
-            st.dataframe(df_total)
+def handle_return_url():
+    """Maneja el retorno desde MercadoPago"""
+    query_params = st.query_params
+    status = query_params.get("status", None)
+    
+    if status == "approved":
+        if 'user_data' in st.session_state and st.session_state.user_data:
+            data = st.session_state.user_data
+            
+            with st.status("Procesando tu inscripción...", expanded=True) as status_box:
+                st.write("Verificando pago...")
+                time.sleep(1)
+                st.write("Registrando en base de datos...")
+                
+                payment_id = query_params.get("payment_id", "MP_UNKNOWN")
+                exito = save_registration(data, payment_id)
+                
+                if exito:
+                    status_box.update(label="¡Inscripción Exitosa!", state="complete", expanded=False)
+                    st.markdown(f"""
+                        <div class="success-box">
+                            <h1>✅ ¡Listo, {data['nombre']}!</h1>
+                            <p>Tu inscripción ha sido confirmada correctamente.</p>
+                            <p>ID de Registro: <strong>{data['id']}</strong></p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    st.balloons()
+                    
+                    # Limpiar sesión para nueva inscripción
+                    if st.button("Realizar nueva inscripción"):
+                        st.session_state.user_data = {}
+                        st.session_state.step = 1
+                        st.query_params.clear()
+                        st.rerun()
+                else:
+                    st.error("Hubo un error guardando tu registro, pero el pago fue exitoso. Por favor contacta al administrador.")
+        else:
+            st.warning("Pago detectado, pero se perdió la sesión del formulario. Si recibiste el correo de MercadoPago, estás cubierto.")
+            
+    elif status == "failure":
+        st.error("❌ El pago fue rechazado o cancelado. Por favor intenta nuevamente.")
+        if st.button("Intentar de nuevo"):
+            st.query_params.clear()
+            st.rerun()
+
+def admin_panel():
+    st.title("Panel de Administración")
+    pwd = st.text_input("Contraseña de Admin", type="password")
+    
+    if pwd == st.secrets["general"].get("admin_password", "admin"):
+        df = get_all_registrations()
+        
+        st.metric("Total Inscritos", len(df))
+        st.metric("Recaudación Estimada", f"${len(df)*PRECIO:,.0f}")
+        
+        st.dataframe(df, use_container_width=True)
+        
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Descargar CSV", csv, "inscritos_wkb.csv", "text/csv")
+
+# --- MAIN APP FLOW ---
+
+def main():
+    # Detectar si estamos en modo Admin (por URL o menú oculto)
+    menu = st.sidebar.selectbox("Navegación", ["Inscripción", "Admin"])
+    
+    if menu == "Admin":
+        admin_panel()
+        return
+
+    # Flujo Normal de Inscripción
+    show_header()
+    
+    # Chequear si venimos volviendo de MercadoPago
+    if "status" in st.query_params:
+        handle_return_url()
+    else:
+        if st.session_state.step == 1:
+            step_1_form()
+        elif st.session_state.step == 2:
+            step_2_payment()
 
 if __name__ == "__main__":
     main()
