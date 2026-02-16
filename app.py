@@ -353,23 +353,25 @@ st.markdown("""
 # === HEADER ===
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
-    st.markdown(f"""
-    <div class="logo-container">
-        <img src="{LOGO_URL}">
-        <h1>WORLD CUP 2026</h1>
-        <p style="color:#888;">SANTIAGO · CHILE · ABRIL 2026</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="logo-container">' +
+        '<img src="' + LOGO_URL + '">' +
+        '<h1>WORLD CUP 2026</h1>' +
+        '<p style="color:#888;">SANTIAGO · CHILE · ABRIL 2026</p>' +
+        '</div>', 
+        unsafe_allow_html=True
+    )
 
 dias, horas, minutos, segundos = tiempo_restante()
-st.markdown(f"""
-<div class="countdown-grid">
-    <div class="countdown-item"><div class="countdown-number">{dias}</div><div>DÍAS</div></div>
-    <div class="countdown-item"><div class="countdown-number">{horas}</div><div>HORAS</div></div>
-    <div class="countdown-item"><div class="countdown-number">{minutos}</div><div>MINUTOS</div></div>
-    <div class="countdown-item"><div class="countdown-number">{segundos}</div><div>SEGUNDOS</div></div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div class="countdown-grid">' +
+    '<div class="countdown-item"><div class="countdown-number">' + str(dias) + '</div><div>DÍAS</div></div>' +
+    '<div class="countdown-item"><div class="countdown-number">' + str(horas) + '</div><div>HORAS</div></div>' +
+    '<div class="countdown-item"><div class="countdown-number">' + str(minutos) + '</div><div>MINUTOS</div></div>' +
+    '<div class="countdown-item"><div class="countdown-number">' + str(segundos) + '</div><div>SEGUNDOS</div></div>' +
+    '</div>',
+    unsafe_allow_html=True
+)
 
 # === TABS ===
 tab1, tab2, tab3, tab4 = st.tabs(["📊 DASHBOARD", "📝 INSCRIPCIÓN", "🏆 BRACKETS", "⚙️ ADMIN"])
@@ -502,7 +504,9 @@ with tab3:
             total_rondas = df_cat['Total_Rondas'].iloc[0]
             rondas = sorted(df_cat['Ronda'].unique())
             
-            html = '<div style="overflow-x: auto; margin: 20px 0;"><div style="display: flex; flex-direction: row; gap: 40px; min-width: min-content; padding: 20px;">'
+            # Construir HTML sin comillas triples
+            html_parts = []
+            html_parts.append('<div style="overflow-x: auto; margin: 20px 0;"><div style="display: flex; flex-direction: row; gap: 40px; min-width: min-content; padding: 20px;">')
             
             for ronda in rondas:
                 df_ronda = df_cat[df_cat['Ronda'] == ronda].sort_values('Posicion')
@@ -516,8 +520,8 @@ with tab3:
                 else:
                     titulo = f"RONDA {ronda}"
                 
-                html += f'<div style="display: flex; flex-direction: column; justify-content: space-around; flex-shrink: 0; width: 280px;">'
-                html += f'<div style="text-align: center; font-family: Orbitron; color: #ff2b2b; font-size: 1.2rem; font-weight: bold; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 2px solid #ff2b2b;">{titulo}</div>'
+                html_parts.append('<div style="display: flex; flex-direction: column; justify-content: space-around; flex-shrink: 0; width: 280px;">')
+                html_parts.append('<div style="text-align: center; font-family: Orbitron; color: #ff2b2b; font-size: 1.2rem; font-weight: bold; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 2px solid #ff2b2b;">' + titulo + '</div>')
                 
                 for _, p in df_ronda.iterrows():
                     c1_winner = p['Ganador'] == p['Competidor1'] and p['Ganador'] != ""
@@ -531,40 +535,46 @@ with tab3:
                     d1 = p['Dojo1'] if p['Dojo1'] else ""
                     d2 = p['Dojo2'] if p['Dojo2'] else ""
                     
-                    bye_badge = '<span style="position:absolute; top:-8px; left:5px; background:gold; color:black; font-size:0.6rem; padding:2px 6px; border-radius:10px; font-weight:bold;">⭐ BYE</span>' if p['Competidor1'] == "BYE" or p['Competidor2'] == "BYE" else ""
+                    html_parts.append('<div style="background: #14161e; border: 1px solid #444; border-radius: 6px; margin: 8px 0; position: relative; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">')
+                    html_parts.append('<span style="position: absolute; top: -8px; right: 5px; background: #000; color: #666; font-size: 0.6rem; padding: 2px 6px; border: 1px solid #333; border-radius: 10px;">#' + str(p['Partido_ID']) + '</span>')
                     
-                    conector = '<div style="position:absolute; top:50%; right:-40px; width:40px; height:2px; background:linear-gradient(90deg, #ff2b2b, #666);"></div>' if ronda < total_rondas else ""
+                    if p['Competidor1'] == "BYE" or p['Competidor2'] == "BYE":
+                        html_parts.append('<span style="position:absolute; top:-8px; left:5px; background:gold; color:black; font-size:0.6rem; padding:2px 6px; border-radius:10px; font-weight:bold;">⭐ BYE</span>')
                     
-                    html += f'''
-                    <div style="background: #14161e; border: 1px solid #444; border-radius: 6px; margin: 8px 0; position: relative; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-                        <span style="position: absolute; top: -8px; right: 5px; background: #000; color: #666; font-size: 0.6rem; padding: 2px 6px; border: 1px solid #333; border-radius: 10px;">#{p['Partido_ID']}</span>
-                        {bye_badge}
-                        {conector}
-                        <div style="padding: 8px 12px; border-bottom: 1px solid #333; {c1_style}">
-                            <div><span style="font-size:0.9rem; color:#fff; font-weight:500;">{n1}</span></div>
-                            <div><span style="font-size:0.65rem; color:#888;">{d1}</span></div>
-                        </div>
-                        <div style="padding: 8px 12px; {c2_style}">
-                            <div><span style="font-size:0.9rem; color:#fff; font-weight:500;">{n2}</span></div>
-                            <div><span style="font-size:0.65rem; color:#888;">{d2}</span></div>
-                        </div>
-                    </div>
-                    '''
+                    if ronda < total_rondas:
+                        html_parts.append('<div style="position:absolute; top:50%; right:-40px; width:40px; height:2px; background:linear-gradient(90deg, #ff2b2b, #666);"></div>')
+                    
+                    # Competidor 1
+                    html_parts.append('<div style="padding: 8px 12px; border-bottom: 1px solid #333; ' + c1_style + '">')
+                    html_parts.append('<div><span style="font-size:0.9rem; color:#fff; font-weight:500;">' + n1 + '</span></div>')
+                    html_parts.append('<div><span style="font-size:0.65rem; color:#888;">' + d1 + '</span></div>')
+                    html_parts.append('</div>')
+                    
+                    # Competidor 2
+                    html_parts.append('<div style="padding: 8px 12px; ' + c2_style + '">')
+                    html_parts.append('<div><span style="font-size:0.9rem; color:#fff; font-weight:500;">' + n2 + '</span></div>')
+                    html_parts.append('<div><span style="font-size:0.65rem; color:#888;">' + d2 + '</span></div>')
+                    html_parts.append('</div>')
+                    
+                    html_parts.append('</div>')
                 
-                html += '</div>'
+                html_parts.append('</div>')
             
-            html += '</div></div>'
+            html_parts.append('</div></div>')
             
-            st.markdown(html, unsafe_allow_html=True)
+            # Unir todas las partes
+            st.markdown(''.join(html_parts), unsafe_allow_html=True)
             
-            st.markdown('''
-            <div style="display:flex; gap:20px; justify-content:center; margin:20px 0; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">
-                <span><span style="color:#ff2b2b;">█</span> Aka (Rojo)</span>
-                <span><span style="color:#1e90ff;">█</span> Ao (Azul)</span>
-                <span style="color:#ffd700;">🏆 Ganador</span>
-                <span style="color:gold;">⭐ BYE</span>
-            </div>
-            ''', unsafe_allow_html=True)
+            # Leyenda
+            st.markdown(
+                '<div style="display:flex; gap:20px; justify-content:center; margin:20px 0; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">' +
+                '<span><span style="color:#ff2b2b;">█</span> Aka (Rojo)</span>' +
+                '<span><span style="color:#1e90ff;">█</span> Ao (Azul)</span>' +
+                '<span style="color:#ffd700;">🏆 Ganador</span>' +
+                '<span style="color:gold;">⭐ BYE</span>' +
+                '</div>', 
+                unsafe_allow_html=True
+            )
     else:
         st.info("📌 No hay brackets generados. Haz clic en 'GENERAR LLAVES'.")
 
@@ -635,8 +645,9 @@ with tab4:
         st.error("❌ Contraseña incorrecta")
 
 # === FOOTER ===
-st.markdown("""
-<div style="text-align:center; color:#666; padding:30px 0; border-top:1px solid #333;">
-    <p>© 2024 World Kyokushin Budokai Chile</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div style="text-align:center; color:#666; padding:30px 0; border-top:1px solid #333;">' +
+    '<p>© 2024 World Kyokushin Budokai Chile</p>' +
+    '</div>',
+    unsafe_allow_html=True
+)
